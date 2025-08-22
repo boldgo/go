@@ -84,6 +84,8 @@ func TestIntendedInlining(t *testing.T) {
 			"(*gcWork).tryGetObjFast",
 			"(*guintptr).set",
 			"(*markBits).advance",
+			"(*mcache).hasReusableNoscan",
+			"(*mcache).hasReusableScan",
 			"(*mspan).allocBitsForIndex",
 			"(*mspan).base",
 			"(*mspan).markBitsForBase",

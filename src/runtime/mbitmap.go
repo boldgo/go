@@ -154,6 +154,27 @@ func (span *mspan) typePointersOfUnchecked(addr uintptr) typePointers {
 		// Pull the allocation header from the first word of the object.
 		typ = *(**_type)(unsafe.Pointer(addr))
 		addr += gc.MallocHeaderSize
+		if typ == nil {
+			// TODO: prior to adjusting mallocgcSmallScanHeader to leave the
+			// header alone when zeroing a reusued object, we could get a nil typ here.
+			// See related comment in mallocgcSmallScanHeader.
+			//
+			// Example prior failure:
+			//     === RUN   TestFreeSized/ptrs=true/size=27264
+			//     typePointersOfUnchecked: typ is nil
+			//      addr=0xc0004de008 base=0xc0004de000
+			//      span.base()=0xc0004de000 span.limit=0xc0004ec000 span.state=mSpanInUse
+			//      span.elemsize=28672 span.nelems=2
+			//      span.spanclass=132 noscan=false
+			//      span.allocCount=2 nalloc=2 nfreed=0
+			//      span.sweepgen=5508 mheap.sweepgen=5508
+			//     fatal error: typePointersOfUnchecked: typ is nil
+			//
+			println("typePointersOfUnchecked: typ is nil")
+			print(" addr=", hex(addr), " objBase=", hex(span.objBase(addr)), "\n")
+			dumpSpan(span)
+			throw("typePointersOfUnchecked: typ is nil")
+		}
 	} else {
 		// Synchronize with allocator, in case this came from the conservative scanner.
 		// See heapSetTypeLarge for more details.
@@ -685,6 +706,46 @@ func (span *mspan) writeHeapBitsSmall(x, dataSize uintptr, typ *_type) (scanSize
 	return
 }
 
+// heapBitsSmallForType calculates what would be the heap bits for a small object of type typ.
+// It has similar requirements as writeHeapBitsSmall.
+func heapBitsSmallForType(dataSize uintptr, typ *_type) (typBits uintptr) {
+	// This is based on writeHeapBitsSmall.
+	//
+	// TODO(thepudds): ideally we do not keep this; see related TODOs in nextReusableScanNoHeader.
+	// TODO(thepudds): if we keep this, we might in theory share this with writeHeapBitsSmall;
+	// initially it did not inline, and then later was cost 42, but now over 80 threshold again.
+	// TODO(thepudds): if we keep this, we could consider a fail fast check up front without
+	// calculating the full typBits based on a masked comparison of the first bits of the
+	// heap bits (before repeating to get the full typBits).
+
+	// Create the heap bits that correspond to typ.
+	// This always fits in a single uintptr.
+	typBits0 := readUintptr(getGCMask(typ))
+
+	// Create repetitions of the bitmap if the size corresponds to a small slice backing store.
+	typBits = typBits0
+	if typ.Size_ == goarch.PtrSize {
+		typBits = (1 << (dataSize / goarch.PtrSize)) - 1
+	} else {
+		// N.B. We rely on dataSize being an exact multiple of the type size.
+		// The alternative is to be defensive and mask out src to the length
+		// of dataSize. The purpose is to save on one additional masking operation.
+		if doubleCheckHeapSetType && !asanenabled && dataSize%typ.Size_ != 0 {
+			throw("runtime: heapBitsSmallForType: dataSize is not a multiple of typ.Size_")
+		}
+		for i := typ.Size_; i < dataSize; i += typ.Size_ {
+			typBits |= typBits0 << (i / goarch.PtrSize)
+		}
+		if asanenabled {
+			// Mask src down to dataSize. dataSize is going to be a strange size because of
+			// the redzone required for allocations when asan is enabled.
+			typBits &= (1 << (dataSize / goarch.PtrSize)) - 1
+		}
+	}
+
+	return typBits
+}
+
 // heapSetType* functions record that the new allocation [x, x+size)
 // holds in [x, x+dataSize) one or more values of type typ.
 // (The number of values is given by dataSize / typ.Size.)
@@ -1021,6 +1082,18 @@ func dumpTypePointers(tp typePointers) {
 		}
 	}
 	println()
+}
+
+// TODO(thepudds): does something like already exist?
+func dumpSpan(span *mspan) {
+	state := span.state.get()
+	print(" span.base()=", hex(span.base()), " span.limit=", hex(span.limit), " span.state=", mSpanStateNames[state], "\n")
+	print(" span.elemsize=", span.elemsize, " span.nelems=", span.nelems, "\n")
+	print(" span.spanclass=", span.spanclass, " noscan=", span.spanclass.noscan(), "\n")
+	nalloc := uint16(span.countAlloc())
+	nfreed := span.allocCount - nalloc
+	print(" span.allocCount=", span.allocCount, " nalloc=", nalloc, " nfreed=", nfreed, "\n")
+	print(" span.sweepgen=", span.sweepgen, " mheap.sweepgen=", mheap_.sweepgen, "\n")
 }
 
 // addb returns the byte pointer p+n.

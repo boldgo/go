@@ -151,6 +151,7 @@ allg,
 < fin,
   spanSetSpine,
   mspanSpecial,
+  reusableLink,
   traceTypeTab,
   MPROF;
 
@@ -196,6 +197,7 @@ defer,
   gscan,
   mspanSpecial,
   pollCache,
+  reusableLink,
   sudog,
   timer
 # Anything that can have write barriers can acquire WB.
@@ -219,7 +221,7 @@ stackLarge,
 # Below mheap is the span allocator implementation.
 
 # Fixallocs
-mheap, mheapSpecial, xRegAlloc, spanSPMCs < globalAlloc;
+mheap, mheapSpecial, reusableLink, xRegAlloc, spanSPMCs < globalAlloc;
 
 # Execution tracer events (with a P)
 hchan,

@@ -216,6 +216,8 @@ type mheap struct {
 	spanalloc                  fixalloc // allocator for span
 	spanSPMCAlloc              fixalloc // allocator for spanSPMC, protected by work.spanSPMCs.lock
 	cachealloc                 fixalloc // allocator for mcache
+	reusableLinkAlloc          fixalloc // allocator for reusableLink
+	reusableLinkLock           mutex    // lock for reusableLink allocator
 	specialfinalizeralloc      fixalloc // allocator for specialfinalizer
 	specialCleanupAlloc        fixalloc // allocator for specialCleanup
 	specialCheckFinalizerAlloc fixalloc // allocator for specialCheckFinalizer
@@ -778,10 +780,12 @@ func heapArenaOf(p uintptr) *heapArena {
 func (h *mheap) init() {
 	lockInit(&h.lock, lockRankMheap)
 	lockInit(&h.speciallock, lockRankMheapSpecial)
+	lockInit(&h.reusableLinkLock, lockRankReusableLink)
 
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.spanSPMCAlloc.init(unsafe.Sizeof(spanSPMC{}), nil, nil, &memstats.gcMiscSys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
+	h.reusableLinkAlloc.init(unsafe.Sizeof(reusableLink{}), nil, nil, &memstats.mcache_sys)
 	h.specialfinalizeralloc.init(unsafe.Sizeof(specialfinalizer{}), nil, nil, &memstats.other_sys)
 	h.specialCleanupAlloc.init(unsafe.Sizeof(specialCleanup{}), nil, nil, &memstats.other_sys)
 	h.specialCheckFinalizerAlloc.init(unsafe.Sizeof(specialCheckFinalizer{}), nil, nil, &memstats.other_sys)

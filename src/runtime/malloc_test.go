@@ -252,6 +252,22 @@ func TestFreegc(t *testing.T) {
 		{"size=4096", testFreegc[[4096]byte], true},
 		{"size=20000", testFreegc[[20000]byte], true},       // not power of 2 or spc boundary
 		{"size=32KiB-8", testFreegc[[1<<15 - 8]byte], true}, // max noscan small object for 64-bit
+
+		// Types with pointers, plus some additional size variation.
+		{"size=16", testFreegc[[16 / PtrSize]*int], false},
+		{"size=24", testFreegc[[24 / PtrSize]*int], false},
+		{"size=32", testFreegc[[32 / PtrSize]*int], false},
+		{"size=64", testFreegc[[64 / PtrSize]*int], false},
+		{"size=72", testFreegc[[72 / PtrSize]*int], false},
+		{"size=200", testFreegc[[200 / PtrSize]*int], false},
+		{"size=504", testFreegc[[504 / PtrSize]*int], false},
+		{"size=512", testFreegc[[512 / PtrSize]*int], false},
+		{"size=520", testFreegc[[520 / PtrSize]*int], false},
+		{"size=4088", testFreegc[[4088 / PtrSize]*int], false},
+		{"size=4096", testFreegc[[4096 / PtrSize]*int], false},
+		{"size=4104", testFreegc[[4104 / PtrSize]*int], false},
+		{"size=14336", testFreegc[[14336 / PtrSize]*int], false},         // size class just below 16 KiB (ignoring header)
+		{"size=32KiB-8", testFreegc[[(1<<15 - 8) / PtrSize]*int], false}, // max scan small object for 64-bit
 	}
 
 	// Run the tests twice if not in -short mode or not otherwise saving test time.
@@ -424,6 +440,122 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 			}
 		})
 
+		t.Run("free-alternating-types", func(t *testing.T) {
+			// Confirm we can allocate and free elements in the same size class
+			// but with pointers in different locations while getting the
+			// expected allocation counts.
+			if SizeSpecializedMallocEnabled && !noscan {
+				// TODO(thepudds): temporarily skip at this point in the stack for
+				// size-specialized malloc with !noscan. Additional integration with
+				// sizespecializedmalloc is in a later CL.
+				t.Skip("skip alloc tests for GOEXPERIMENT=sizespecializedmalloc for pointer types")
+			}
+			if !RuntimeFreegcEnabled {
+				t.Skip("skipping alloc tests with runtime.freegc disabled")
+			}
+
+			var tZero T
+			tBytes := unsafe.Sizeof(tZero)
+			ptrBytes := unsafe.Sizeof(uintptr(0))
+
+			// Don't bother testing noscan, or odd numbers of pointers in T.
+			// (An odd count of pointers in T would need to be rounded for mixedType,
+			// but the mixedType slice might end up in a different size class,
+			// depending on the boundary.)
+			if noscan || (tBytes/ptrBytes)%2 != 0 {
+				return
+			}
+
+			// mixedType has pointers and non-pointer fields.
+			type mixedType struct {
+				u uint
+				p *int
+			}
+			allocMixedType := func() []mixedType {
+				s := make([]mixedType, (tBytes/ptrBytes)/2)
+				for i := range s {
+					// Perhaps increase odds of catching pointer confusion
+					// by using the ClobberdeadPtr pattern.
+					s[i].u = uint(ClobberdeadPtr)
+				}
+				return s
+			}
+			mixedTypeBytes := uintptr(len(allocMixedType())) * unsafe.Sizeof(mixedType{})
+
+			// First, test alternating with a mixedType slice (which mixes pointer and
+			// non-pointer fields).
+			const maxOutstanding = 10
+			s1 := make([]*T, 0, maxOutstanding)
+			s2 := make([][]mixedType, 0, maxOutstanding)
+			allocs := testing.AllocsPerRun(1000, func() {
+				s1 = s1[:0]
+				s2 = s2[:0]
+				for range maxOutstanding {
+					p1 := alloc()
+					s1 = append(s1, p1)
+					p2 := allocMixedType()
+					s2 = append(s2, p2)
+				}
+				for i := range s1 {
+					free(s1[i])
+					noscan := false
+					runtime.Freegc(unsafe.Pointer(unsafe.SliceData(s2[i])), mixedTypeBytes, noscan)
+				}
+			})
+			t.Logf("free-alternating-types: T: %d bytes, mixedType: %d bytes, allocs %v",
+				tBytes, mixedTypeBytes, allocs)
+
+			if allocs > 5 {
+				// TODO(thepudds): earlier, we could consistently get at most 1 alloc here,
+				// but we've made some of our thresholds more conservative (like how many objects
+				// we will discard based on mismatching heap bits), so will consider at least 50%
+				// reduction a good score for now on this test.
+				t.Fatalf("expected < 5 allocations, got %v", allocs)
+			}
+
+			type allPtrType struct {
+				p1 *int
+				p2 *int
+			}
+			allocAllPtrType := func() []allPtrType {
+				s := make([]allPtrType, (tBytes/ptrBytes)/2)
+				return s
+			}
+			allPtrTypeBytes := uintptr(len(allocAllPtrType())) * unsafe.Sizeof(allPtrType{})
+
+			// Sanity check our test.
+			if tBytes != mixedTypeBytes || mixedTypeBytes != allPtrTypeBytes {
+				t.Fatalf("size mismatch: T: %d, mixedTypeBytes: %d, allPtrTypeBytes: %d",
+					tBytes, mixedTypeBytes, allPtrTypeBytes)
+			}
+
+			// Second, test alternating with a allPtrType slice (which is all pointers, and
+			// hence is recognized as having same heap bits as T, which is an array).
+			s3 := make([][]allPtrType, 0, maxOutstanding)
+			allocs = testing.AllocsPerRun(1000, func() {
+				s1 = s1[:0]
+				s3 = s3[:0]
+				for range maxOutstanding {
+					p1 := alloc()
+					s1 = append(s1, p1)
+					p3 := allocAllPtrType()
+					s3 = append(s3, p3)
+				}
+				for i := range s1 {
+					free(s1[i])
+					noscan := false
+					runtime.Freegc(unsafe.Pointer(unsafe.SliceData(s3[i])), allPtrTypeBytes, noscan)
+				}
+			})
+			t.Logf("free-alternating-types: T: %d bytes, allPtrType: %d bytes, allocs: %v",
+				tBytes, allPtrTypeBytes, allocs)
+
+			if allocs != 0 {
+				// The all pointer slice should allow zero allocs.
+				t.Fatalf("expected 0 allocations, got %v", allocs)
+			}
+		})
+
 		t.Run("duplicate-check", func(t *testing.T) {
 			// A simple duplicate allocation test. We track what should be the set
 			// of live pointers in a map across a series of allocs and frees,
@@ -529,18 +661,25 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 			}
 
 			// Use a background goroutine to continuously run the GC.
-			done := make(chan struct{})
-			defer close(done)
-			go func() {
-				for {
-					select {
-					case <-done:
-						return
-					default:
-						runtime.GC()
+			// TODO(thepudds): note we can only run the GC in the backround for this test for noscan
+			// types because we are currently disabling reuse for scan objects when the
+			// write barrier is enabled, which means the basic premise of the test of
+			// "alloc / free has a net zero effect on assist credit" is not meaningful,
+			// because the reuse is partially disabled.
+			if noscan {
+				done := make(chan struct{})
+				defer close(done)
+				go func() {
+					for {
+						select {
+						case <-done:
+							return
+						default:
+							runtime.GC()
+						}
 					}
-				}
-			}()
+				}()
+			}
 
 			// If making changes related to this test, consider testing locally with
 			// larger counts, like 100K or 1M.
