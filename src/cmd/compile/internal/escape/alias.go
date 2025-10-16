@@ -7,10 +7,14 @@ package escape
 import (
 	"cmd/compile/internal/base"
 	"cmd/compile/internal/ir"
+	"cmd/compile/internal/types"
 	"cmd/internal/src"
+	"cmp"
 	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
 type aliasAnalysis struct {
@@ -28,6 +32,19 @@ type aliasAnalysis struct {
 	// loops is a stack of observed loops,
 	// each with a list of candidate appends.
 	loops [][]candidateAppend
+
+	// The next three fields record some
+	// structural information about the code:
+
+	// allowedAssignments are assignments we know are safe.
+	allowedAssignments map[assignment]bool
+
+	// originalNames tracks renamings that are safe.
+	originalNames map[*ir.Name]*ir.Name // new name -> original name (which is child -> parent).
+
+	// labels allows us to recognize backwards gotos
+	// (a potential unstructured loop, which we give up on).
+	labels map[*types.Sym]labelState
 
 	// State for optional validation checking (doubleCheck mode):
 	processed   map[ir.Node]int // count of times each node was processed, for doubleCheck mode
@@ -163,6 +180,9 @@ func (aa *aliasAnalysis) analyze(fn *ir.Func) {
 	// Initialize.
 	aa.fn = fn
 	aa.candidateSlices = make(map[*ir.Name]candidateSlice) // slices that might be unaliased
+	aa.allowedAssignments = make(map[assignment]bool)
+	aa.originalNames = make(map[*ir.Name]*ir.Name) // renamings in inlined functions (child->parent)
+	aa.labels = loopingLabels(fn)
 
 	// doubleCheck controls whether we do a sanity check of our processing logic
 	// by counting each node visited in our main pass, and then comparing those counts
@@ -245,12 +265,12 @@ func (aa *aliasAnalysis) visit(n ir.Node) bool {
 		// so remove any corresponding candidate slice.
 		if n.Type().IsSlice() {
 			name := n.(*ir.Name)
-			_, ok := aa.candidateSlices[name]
-			if ok {
-				delete(aa.candidateSlices, name)
-				if base.Debug.EscapeAlias >= 2 {
-					aa.diag(n.Pos(), name, "removing candidate slice", "")
-				}
+			_, found := aa.candidateSlices[name]
+			delete(aa.candidateSlices, name)
+			orig := aa.originalName(name)
+			delete(aa.candidateSlices, orig)
+			if found && base.Debug.EscapeAlias >= 2 {
+				aa.diag(n.Pos(), name, "removing candidate slice", "(original name: %v)", orig)
 			}
 		}
 		// No children.
@@ -346,13 +366,16 @@ func (aa *aliasAnalysis) visit(n ir.Node) bool {
 		clear(aa.candidateSlices)
 		return ir.DoChildren(n, aa.visit)
 
-	case ir.OLABEL, ir.OGOTO:
-		// Give up on all our in-progress slices.
-		if base.Debug.EscapeAlias >= 2 {
-			aa.diag(n.Pos(), n, "clearing all in-progress slices due to label or goto",
-				"(was %d in-progress slices)", len(aa.candidateSlices))
+	case ir.OLABEL:
+		n := n.(*ir.LabelStmt)
+		if aa.labels[n.Label] == looping {
+			// Give up on all our in-progress slices.
+			if base.Debug.EscapeAlias >= 2 {
+				aa.diag(n.Pos(), n, "clearing all in-progress slices due to backward jumping label",
+					"(was %d in-progress slices)", len(aa.candidateSlices))
+			}
+			clear(aa.candidateSlices)
 		}
-		clear(aa.candidateSlices)
 		return false
 
 	default:
@@ -403,6 +426,17 @@ func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 		// Now check what we have on the RHS.
 		switch src.Op() {
 		// Cases:
+		// From OAS2:
+		case ir.ONAME:
+			dst := dsts[i].(*ir.Name)
+			src := srcs[i].(*ir.Name)
+			if aa.allowedAssignment(dst, src) {
+				if base.Debug.EscapeAlias >= 3 {
+					aa.diag(assign.Pos(), dst, "found allowed assignment", "(%v = %v)", dst, src)
+				}
+				aa.countProcessed(dst, src)
+				continue
+			}
 
 		// Check for s := make([]T, ...) or s := []T{...}, along with the '=' version
 		// of those which does not alias s as long as s is not used in the make.
@@ -440,8 +474,11 @@ func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 				// Mark the call as processed, and s twice.
 				aa.countProcessed(s, call, s)
 
-				if _, ok := aa.candidateSlices[s]; ok {
-					a := candidateAppend{s: s, call: call}
+				// Inlined calls may have renamed the slice; track decisions
+				// against the original candidate slice.
+				orig := aa.originalName(s)
+				if _, ok := aa.candidateSlices[orig]; ok {
+					a := candidateAppend{s: orig, call: call}
 					if len(dsts) == 1 {
 						// Keep the common single-assignment path allocation-free.
 						aa.recordAppend(assign, a)
@@ -455,6 +492,122 @@ func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 				}
 				continue
 			}
+
+		// Check for inlined calls.
+		case ir.OINLCALL:
+			// First, walk the inlined call to setup allowed assignments and original name mapping
+			// from the inline call formal parameters.
+			// After that is setup, then we visit the call itself to catch any other uses of names
+			// and t [...]
+			//
+			// Note that we expect to find the inline formal arguments in the first slot in init.
+			// (If we don't, the net result is no special handling of this inline call, which means
+			// any slice arguments as well as the dest side of the assignment such as
+			// 's = inlineCall()' will be treated as aliasing.)
+
+			// TODO: maybe only do this with at least one return value? might simplify end logic...
+
+			call := src.(*ir.InlinedCallExpr)
+			if len(call.Init()) == 0 || call.Init()[0].Op() != ir.OAS2 {
+				// We only analyze inline formal arguments in the first slot in init,
+				// so no special treatment.
+				if base.Debug.EscapeAlias >= 2 {
+					aa.diag(assign.Pos(), dst, "unable to analyze inline call", "%v = %v", dst, src)
+				}
+				break
+			}
+			inlAssign := call.Init()[0].(*ir.AssignListStmt)
+
+			// Find a slice formal parameter and its corresponding argument if there is
+			// at most one such pair. (The slice parameter can be in any slot, but
+			// we only allow one slice parameter).
+			sliceParam, sliceArg, sliceParamCount := inlFormalSliceParam(inlAssign)
+			if sliceParamCount > 1 || len(call.ReturnVars) > 1 {
+				// Too many to analyze currently, so no special treatment for this inline call.
+				if base.Debug.EscapeAlias >= 2 {
+					aa.diag(assign.Pos(), dst,
+						"not allowing renamings: inline call has too many slice params or return values",
+						"%v = %v", dst, src)
+				}
+				break
+			}
+
+			// Allow an optional single slice return value from the inlined function.
+			// TODO(thepudds): could instead loop to find at most one (in any slot)?
+			var returnSlice *ir.Name
+			if len(call.ReturnVars) == 1 && call.ReturnVars[0].Op() == ir.ONAME && call.ReturnVars[0].Type().IsSlice() {
+				returnSlice = call.ReturnVars[0].(*ir.Name)
+			}
+
+			// If we have both a slice argument and a slice return value, check that they are
+			// the same. (Something like 's = inlineCall(s)' is ok if inlineCall is well behaved,
+			// but 's2 = inlineCall(s)' might leave s2 and s aliased.)
+			if returnSlice != nil && sliceArg != nil && dst != sliceArg {
+				// We have a return slice, but not assigning back to the same slice
+				// as the slice arg, so no special treatment.
+				if base.Debug.EscapeAlias >= 2 {
+					aa.diag(assign.Pos(),
+						dst,
+						"not allowing renamings: inline call does not assign back to same slice",
+						"%v = %v", dst, src)
+				}
+				break
+			}
+
+			// We have at most one slice argument to the inlined function,
+			// and if there is a slice return value, it is being assigned the single slice argument.
+			if sliceParam != nil && sliceArg != nil {
+				// sliceParam is an allowed renaming of sliceArg (child->parent)
+				aa.addAllowedRenaming(sliceParam, sliceArg)
+				if returnSlice != nil {
+					// returnSlice is an allowed renaming of sliceParam.
+					// This effectively enforces that returnSlice can only be considered unaliased
+					// if it is assigned via an unaliased sliceParam, which in turn must come
+					// from an unaliased sliceArg.
+					//
+					// We only do this to support something like 's = appendingInlineCall(s)'
+					// so that s can be considered unaliased after the call if the call does
+					// not introduce any aliasing. Therefore, we only do this if there is
+					// a slice parameter.
+					aa.addAllowedRenaming(returnSlice, sliceParam)
+				}
+				if base.Debug.EscapeAlias >= 3 {
+					aa.logStructualInfo(assign)
+				}
+			}
+
+			// Now we've prepared any meta data, so do the visiting of the assingnment.
+			// TODO: done: I think we can only skip dst (s) if we verified that s is the
+			// only input slice param (retval == inputParam, names compare equal)
+			aa.countProcessed(call) // inlineCall
+			aa.visitList(call.Init())
+			aa.visitList(call.Body)
+
+			for _, ret := range call.ReturnVars {
+				if ret.Op() != ir.ONAME {
+					base.FatalfAt(ret.Pos(), "return var not ONAME")
+				}
+				aa.countProcessed(ret)
+			}
+
+			// We've now visited the body. Check if the returnSlice
+			// being assigned to dst is unaliased.
+			if _, ok := aa.candidateSlices[aa.originalName(returnSlice)]; ok {
+				// We don't need to visit dst (which would clear dst)
+				// because returnSlice is unaliased.
+				if base.Debug.EscapeAlias >= 2 {
+					aa.diag(assign.Pos(), assign, "return value for OINLCALL is not aliased", "")
+				}
+				aa.countProcessed(dst)
+			} else {
+				if base.Debug.EscapeAlias >= 2 {
+					aa.diag(assign.Pos(), assign, "cannot prove return value for OINLCALL is aliased", "")
+				}
+				aa.visit(dst)
+			}
+			continue
+			// End of case ir.OINLCALL.
+
 		} // End of switch on src.Op().
 
 		// Reached bottom of the loop over assignments.
@@ -510,6 +663,83 @@ func (aa *aliasAnalysis) recordAppend(assign ir.Node, a candidateAppend) {
 	}
 }
 
+// assignment represents an assignment 'dst = src',
+// currently used for tracking renamings across inlined functions.
+type assignment struct {
+	dst *ir.Name
+	src *ir.Name
+}
+
+// addAllowedRenaming records that 'dst = src' is an allowed renaming,
+// which means we will treat it as an allowed assignment and also track
+// what name dst originated from.
+//
+// Currently this is used to track a slice across an inlined function
+// as it is renamed from the inline call argument to the inline call
+// formal paramter and possibly from the parameter back to a return value.
+//
+// We track the original name of dst so that we can remove an aliased slice
+// via the name known in the ultimate parent. (Candidate slices are tracked
+// starting at their declaration, so when removing a candidate slice,
+// we want to use the name for the slice as originally declared).
+//
+// For example, if we have the following allowed renamings in the code,
+// the original names would be:
+//
+//	var x []int             // x's original name is x (not a renaming)
+//	inlParam := x           // inlParam's original name is x
+//	inlResult := inlParam   // inlResult's original name is also x
+//
+// We currently assume that renamings are added in the order they would
+// execute in the code (so 'inlParam := x' before 'inlResult := inlParam').
+func (aa *aliasAnalysis) addAllowedRenaming(dst, src *ir.Name) {
+	if dst == nil || src == nil {
+		base.FatalfAt(dst.Pos(), "allowed renaming with nil name: dst=%v src=%v", dst, src)
+	}
+	// First, record that this is an allowed reassignment.
+	a := assignment{dst: dst, src: src}
+	if _, ok := aa.allowedAssignments[a]; ok {
+		base.FatalfAt(dst.Pos(), "allowed assignment already tracked: %v", a)
+	}
+	aa.allowedAssignments[a] = true
+
+	// Second, track the original name for dst so that we can look up dst
+	// later and get to the original name, including through multiple renamings.
+	// To do this, we first look up the original name for src.
+	orig := aa.originalName(src)
+	if _, ok := aa.originalNames[dst]; ok {
+		base.FatalfAt(dst.Pos(), "new name already has original name mapping: %v", dst)
+	}
+	aa.originalNames[dst] = orig
+}
+
+// allowedAssignment reports whether the assignment dst = src is allowed
+// (i.e. does not cause dst or src to be aliased).
+//
+// This is true if we have previously recorded this assignment
+// as an allowed renaming.
+func (aa *aliasAnalysis) allowedAssignment(dst, src *ir.Name) bool {
+	a := assignment{dst: dst, src: src}
+	_, ok := aa.allowedAssignments[a]
+	return ok
+}
+
+// originalName returns the original name for n.
+// A non-nil name is always returned, which might be the passed in name.
+//
+// Original names are tracked if we have previously recorded n as the
+// destination (LHS) of an allowed renaming.
+func (aa *aliasAnalysis) originalName(n *ir.Name) (orig *ir.Name) {
+	orig, ok := aa.originalNames[n]
+	if !ok {
+		return n
+	}
+	if orig == nil {
+		base.FatalfAt(n.Pos(), "original name mapping to nil for: %v", n)
+	}
+	return orig
+}
+
 func (aa *aliasAnalysis) countProcessed(nodes ...ir.Node) {
 	if aa.doubleCheck {
 		for _, n := range nodes {
@@ -554,10 +784,80 @@ func doubleCheckProcessed(fn *ir.Func, processed map[ir.Node]int) {
 	}
 }
 
+// Returns an inlined formal slice paramter, along with a total count found.
+// If there is more than one found or none, returns nil.
+func inlFormalSliceParam(assign *ir.AssignListStmt) (param *ir.Name, arg *ir.Name, count int) {
+	for i := range assign.Lhs {
+		lhs := assign.Lhs[i]
+		rhs := assign.Rhs[i]
+		if lhs.Op() == ir.ONAME && rhs.Op() == ir.ONAME && lhs.(*ir.Name).InlFormal() && lhs.Type().IsSlice() {
+			param = lhs.(*ir.Name)
+			arg = rhs.(*ir.Name)
+			count++
+		}
+	}
+	if count > 1 {
+		return nil, nil, count
+	}
+	return param, arg, count
+}
+
+// loopingLabels identifies labels that mark the head of an unstructured loop.
+func loopingLabels(fn *ir.Func) map[*types.Sym]labelState {
+	// TODO(thepudds): de-dup with similar code in escape.go, or use the escape.go result directly.
+	labels := make(map[*types.Sym]labelState)
+	ir.Visit(fn, func(n ir.Node) {
+		switch n.Op() {
+		case ir.OLABEL:
+			n := n.(*ir.LabelStmt)
+			if n.Label.IsBlank() {
+				break
+			}
+			labels[n.Label] = nonlooping
+
+		case ir.OGOTO:
+			// If we visited the label before the goto,
+			// then this is a looping label.
+			n := n.(*ir.BranchStmt)
+			if labels[n.Label] == nonlooping {
+				labels[n.Label] = looping
+			}
+		}
+	})
+
+	return labels
+}
+
 func fmtPosShort(xpos src.XPos) string {
 	// TODO(thepudds): I think I did this a simpler way a while ago? Or maybe add base.FmtPosShort
 	// or similar? Or maybe just use base.FmtPos and give up on nicely aligned log messages?
 	pos := base.Ctxt.PosTable.Pos(xpos)
 	shortLine := filepath.Base(pos.AbsFilename()) + ":" + pos.LineNumber()
 	return shortLine
+}
+
+func (aa *aliasAnalysis) logStructualInfo(n ir.Node) {
+	aa.diag(n.Pos(), aa.fn, "structural info: updated mappings in parent func", "")
+	keys := slices.SortedFunc(maps.Keys(aa.allowedAssignments), func(a, b assignment) int {
+		return cmp.Or(
+			strings.Compare(a.dst.Sym().Name, b.dst.Sym().Name),
+			strings.Compare(a.src.Sym().Name, b.src.Sym().Name),
+		)
+	})
+	for _, allowed := range keys {
+		aa.diag(n.Pos(),
+			aa.fn,
+			"structural info: allowed assignment",
+			"%v = %v", allowed.dst, allowed.src)
+	}
+	children := slices.SortedFunc(maps.Keys(aa.originalNames), func(a, b *ir.Name) int {
+		return strings.Compare(a.Sym().Name, b.Sym().Name)
+	})
+	for _, child := range children {
+		parent := aa.originalNames[child]
+		aa.diag(n.Pos(),
+			aa.fn,
+			"structural info: original name mapping (child -> parent)",
+			"%v -> %v", child, parent)
+	}
 }

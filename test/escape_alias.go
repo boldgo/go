@@ -620,14 +620,14 @@ func inlineReturn(param []int) []int {
 func inline1a() {
 	var s []int
 	s = inlineReturn(s)
-	s = append(s, 0)
+	s = append(s, 0) // ERROR "append using non-aliased slice"
 }
 
 func inline1b() {
 	var s []int
 	for range 10 {
 		s = inlineReturn(s)
-		s = append(s, 0)
+		s = append(s, 0) // ERROR "append using non-aliased slice"
 	}
 }
 
@@ -649,6 +649,20 @@ func inline1d() {
 	}
 }
 
+func inline1e() {
+	var s []int
+	s2 := inlineReturn(s)
+	s = append(s, 0)
+	s2 = append(s2, 0)
+}
+
+func inline1f() {
+	var s []int
+	s = inlineReturn(s)
+	s = inlineReturn(s)
+	s = append(s, 0) // ERROR "append using non-aliased slice"
+}
+
 // Examples with an inlined function that uses append.
 
 func inlineAppend(param []int) []int {
@@ -659,15 +673,15 @@ func inlineAppend(param []int) []int {
 
 func inline2a() {
 	var s []int
-	s = inlineAppend(s)
-	s = append(s, 0)
+	s = inlineAppend(s) // ERROR "append using non-aliased slice"
+	s = append(s, 0)    // ERROR "append using non-aliased slice"
 }
 
 func inline2b() {
 	var s []int
 	for range 10 {
-		s = inlineAppend(s)
-		s = append(s, 0)
+		s = inlineAppend(s) // ERROR "append using non-aliased slice"
+		s = append(s, 0)    // ERROR "append using non-aliased slice"
 	}
 }
 
@@ -687,6 +701,500 @@ func inline2d() {
 		s = append(s, 0)
 		alias = s
 	}
+}
+
+func inline2e() {
+	var s []int
+	s2 := inlineAppend(s)
+	s = append(s, 0)
+	s2 = append(s2, 0)
+}
+
+func inline2f() {
+	var s []int
+	s2 := inlineAppend(s)
+	_ = s2
+}
+
+func inline2g() {
+	var s []int
+	s = inlineAppend(s) // ERROR "append using non-aliased slice"
+	s = inlineAppend(s) // ERROR "append using non-aliased slice"
+	s = append(s, 0)    // ERROR "append using non-aliased slice"
+}
+
+func inline2h() {
+	var s []int
+	alias = s
+	s = inlineAppend(s)
+	s = append(s, 0)
+}
+
+// Examples with an inlined function that uses append but also aliases.
+
+func inlineAppendWithAlias(param []int) []int {
+	alias = param
+	param = append(param, 0)
+	return param
+}
+
+func inline3a() {
+	var s []int
+	s = inlineAppendWithAlias(s)
+	s = append(s, 0)
+}
+
+func inline3b() {
+	var s []int
+	for range 10 {
+		s = inlineAppendWithAlias(s)
+		s = append(s, 0)
+	}
+}
+
+func inline3c() {
+	var s []int
+	for range 10 {
+		s = inlineAppendWithAlias(s)
+		alias = s
+		s = append(s, 0)
+	}
+}
+
+func inline3d() {
+	var s []int
+	for range 10 {
+		s = inlineAppendWithAlias(s)
+		s = append(s, 0)
+		alias = s
+	}
+}
+
+func inline3f() {
+	var s []int
+	for range 10 {
+		s = append(s, 0)
+		s = inlineAppendWithAlias(s)
+	}
+}
+
+func inline3g() {
+	for range 10 {
+		var s []int
+		s = append(s, 0) // ERROR "append using non-aliased slice"
+		s = inlineAppendWithAlias(s)
+	}
+}
+
+func inline3h() {
+	for range 10 {
+		var s []int
+		s = inlineAppendWithAlias(s)
+		s = append(s, 0)
+	}
+}
+
+// Inlining examples showing why we do not currently allow multiple slice arguments to an inlined function,
+// because that could introduce an aliasing (absent more sophisticated analysis).
+
+func inlineAppendTwo(param1, param2 []int) []int {
+	param1 = append(param1, 0)
+	param2 = append(param2, 0)
+	return param1
+}
+
+func inline4a() {
+	var s []int
+	s = inlineAppendTwo(s, s)
+	s = append(s, 0)
+}
+
+func inline4b() {
+	var s1, s2 []int
+	s1 = inlineAppendTwo(s1, s2)
+	s1 = append(s1, 0)
+	s2 = append(s2, 0)
+}
+
+func inlineAppendTwoNoReturn(param1, param2 []int) {
+	param1 = append(param1, 0)
+	param2 = append(param2, 0)
+}
+
+func inline5a() {
+	var s []int
+	inlineAppendTwoNoReturn(s, s)
+	s = append(s, 0)
+
+}
+
+func inline5b() {
+	var s1, s2 []int
+	inlineAppendTwoNoReturn(s1, s2)
+	s1 = append(s1, 0)
+	s2 = append(s2, 0)
+}
+
+func inlineAppendWithOtherArgs(n int, param []int) []int {
+	param = append(param, 0)
+	return param
+}
+
+func inline6a() {
+	var s []int
+	s = inlineAppendWithOtherArgs(42, s) // ERROR "append using non-aliased slice"
+	s = append(s, 0)                     // ERROR "append using non-aliased slice"
+}
+
+func inline6b() {
+	var s []int
+	s2 := inlineAppendWithOtherArgs(42, s)
+	_ = s2
+}
+
+func inline6c() {
+	var s []int
+	s2 := inlineAppendWithOtherArgs(42, s)
+	s = append(s, 0)
+	s2 = append(s2, 0)
+}
+
+// Some inlining examples with functions returning global slices.
+
+var global []int
+
+func inlineAppendGlobal(param []int) []int {
+	global = append(global, 0)
+	return global
+}
+
+func inlineAppendGlobalUse() {
+	var s []int
+	s = inlineAppendGlobal(s)
+	s = append(s, 0)
+}
+
+func inlineReturnGlobal(param []int) []int {
+	return global
+}
+
+func inlineReturnGlobalUse() {
+	var s []int
+	s = inlineReturnGlobal(s)
+	s = append(s, 0)
+}
+
+func inlineReturnGlobalNoArg() []int {
+	return global
+}
+
+// TODO: why did our change fix this one too?
+// partial answer is these two pieces seems not requried to fix this one in particular:
+//
+//	origDst := originalName(dst.(*ir.Name))
+//	originalNames[returnSlice] = origDst
+func inlineReturnGlobalNoArgUse() {
+	var s []int
+	s = inlineReturnGlobalNoArg()
+	s = append(s, 0)
+}
+
+func assignGlobal() {
+	var s []int
+	s = global
+	s = append(s, 0)
+}
+
+// Inlining examples with some basic attempts to smuggle an alias via another parameter.
+
+type Foo struct {
+	smuggle []int
+}
+
+func inlineSmuggleArg(param []int, foo *Foo) []int {
+	foo.smuggle = param
+	return param
+}
+
+func inlineSmuggleArgUse() {
+	var s []int
+	var foo Foo
+	s = inlineSmuggleArg(s, &foo)
+	s = append(s, 0)
+}
+
+func inlineSmuggleReturn(param []int) Foo {
+	var foo Foo
+	foo.smuggle = param
+	return foo
+}
+
+func inlineSmuggleReturnUse() {
+	var s []int
+	smug := inlineSmuggleReturn(s)
+	s = append(s, 0)
+	_ = smug
+}
+
+func (f *Foo) methodSmuggle(param []int) {
+	f.smuggle = param
+}
+
+func inlineSmuggleMethodUse() {
+	var s []int
+	var foo Foo
+	foo.methodSmuggle(s)
+	s = append(s, 0)
+}
+
+// Examples with inlining in nested loops.
+
+func inlineNested1a() {
+	var s []int
+	for range 10 {
+		for range 10 {
+			s = inlineAppendWithAlias(s)
+		}
+	}
+}
+
+func inlineNested1b() {
+	for range 10 {
+		var s []int
+		for range 10 {
+			s = inlineAppendWithAlias(s)
+		}
+	}
+}
+
+func inlineNested1c() {
+	for range 10 {
+		for range 10 {
+			var s []int
+			s = inlineAppendWithAlias(s)
+		}
+	}
+}
+
+func inlineNested2a() {
+	var s []int
+	for range 10 {
+		for range 10 {
+			s = inlineAppend(s) // ERROR "append using non-aliased slice"
+		}
+	}
+}
+
+func inlineNested2b() {
+	for range 10 {
+		var s []int
+		for range 10 {
+			s = inlineAppend(s) // ERROR "append using non-aliased slice"
+		}
+	}
+}
+
+func inlineNested2c() {
+	for range 10 {
+		for range 10 {
+			var s []int
+			s = inlineAppend(s) // ERROR "append using non-aliased slice"
+		}
+	}
+}
+
+func inlineNested3a() {
+	var s []int
+	for range 10 {
+		alias = s
+		for range 10 {
+			s = inlineAppend(s)
+		}
+	}
+}
+
+func inlineNested3b() {
+	for range 10 {
+		var s []int
+		alias = s
+		for range 10 {
+			s = inlineAppend(s)
+		}
+	}
+}
+
+func inlineNested4a() {
+	var s []int
+	for range 10 {
+		for range 10 {
+			s = inlineAppend(s)
+		}
+		alias = s
+	}
+}
+
+func inlineNested4b() {
+	for range 10 {
+		var s []int
+		for range 10 {
+			s = inlineAppend(s) // ERROR "append using non-aliased slice"
+		}
+		alias = s
+	}
+}
+
+func inlineNested5a() {
+	var s []int
+	for range 10 {
+		for range 10 {
+			alias = s
+			s = inlineAppend(s)
+		}
+	}
+}
+
+func inlineNested5b() {
+	for range 10 {
+		var s []int
+		for range 10 {
+			alias = s
+			s = inlineAppend(s)
+		}
+	}
+}
+
+func inlineNested5c() {
+	for range 10 {
+		for range 10 {
+			var s []int
+			alias = s
+			s = inlineAppend(s)
+		}
+	}
+}
+
+func inlineNested6a() {
+	var s []int
+	for range 10 {
+		for range 10 {
+			s = inlineAppend(s)
+			alias = s
+		}
+	}
+}
+
+func inlineNested6b() {
+	for range 10 {
+		var s []int
+		for range 10 {
+			s = inlineAppend(s)
+			alias = s
+		}
+	}
+}
+
+func inlineNested6c() {
+	for range 10 {
+		for range 10 {
+			var s []int
+			s = inlineAppend(s) // ERROR "append using non-aliased slice"
+			alias = s
+		}
+	}
+}
+
+// Examples with multiple levels of inlining.
+
+func inlineMultiLevel1(inlineParam []int) []int {
+	inlineParam = inlineAppend(inlineParam)
+	return inlineParam
+}
+
+func inlineMultiLevel2() {
+	var s []int
+	s = inlineMultiLevel1(s) // ERROR "append using non-aliased slice"
+}
+
+func inlineMultiLevel3(param []int) []int {
+	param = inlineAppend(inlineReturn(append(param, 0)))
+	return param
+}
+
+// TODO(thepudds): probably can handle these cases too. Might be the simple inlining detection in OAS.
+
+func inlineMultiLevel4() {
+	var s []int
+	s = inlineMultiLevel3(s)
+	s = append(s, 0) // want "append using non-aliased slice"
+}
+
+func inlineMultiLevel5() {
+	var s []int
+	alias = s
+	s = inlineMultiLevel3(s)
+	s = append(s, 0) // want "append using non-aliased slice"
+}
+
+func inlineMultiLevel6() {
+	var s []int
+	s = inlineMultiLevel3(s)
+	alias = s
+	s = append(s, 0) // want "append using non-aliased slice"
+}
+
+func inlineMultiLevel7() {
+	var s []int
+	s = inlineMultiLevel3(s)
+	s = append(s, 0) // want "append using non-aliased slice"
+	alias = s
+}
+
+func inlineMultiLevel8() {
+	var s []int
+	for range 10 {
+		s = inlineMultiLevel3(s)
+		alias = s
+	}
+}
+
+func inlineMultiLevel9() {
+	var s []int
+	for range 10 {
+		s = inlineMultiLevel3(s) // want "append using non-aliased slice"
+	}
+	alias = s
+}
+
+func inlineMultiLevel10(inlineParam []int) []int {
+	inlineParam = inlineAppendWithAlias(inlineParam)
+	return inlineParam
+}
+
+func inlineMultiLevel11() {
+	var s []int
+	s = inlineMultiLevel10(s)
+}
+
+func inlineMultiLevel12(inlineParam []int) []int {
+	alias = inlineParam
+	inlineParam = inlineAppend(inlineParam)
+	return inlineParam
+}
+
+func inlineMultiLevel13() {
+	var s []int
+	s = inlineMultiLevel12(s)
+}
+
+func inlineMultiLevel14(inlineParam []int) []int {
+	inlineParam = inlineAppend(inlineParam)
+	alias = inlineParam
+	return inlineParam
+}
+
+func inlineMultiLevel15() {
+	var s []int
+	s = inlineMultiLevel14(s) // ERROR "append using non-aliased slice"
 }
 
 // Examples calling non-inlined functions that do and do not escape.
@@ -860,12 +1368,12 @@ func break1() {
 	var s []int
 label:
 	for i := range 10 {
-		s = append(s, i)
+		s = append(s, i) // ERROR "append using non-aliased slice"
 		break label
 	}
 }
 
-// Examples with iterators.
+// Examples with iterators. We are currently helped by inlining.
 
 func collect[E any](seq Seq[E]) []E {
 	var result []E
@@ -885,14 +1393,171 @@ func count(yield func(int) bool) {
 
 func iteratorUse1() {
 	var s []int
-	s = collect(count)
+	s = collect(count) // ERROR "append using non-aliased slice: append\(result, v\)"
 	_ = s
 }
 
+// TODO(thepudds): to get the 's = append(s, 0)' here, when the return value from collect is unaliased
+// and s is otherwise unaliased, we could allow 's = collect(count)' as '<unaliased> = <unaliased>'
+// then then consider s unaliased when getting to 's = append(s, 0)'.
 func iteratorUse2() {
 	var s []int
-	s = collect(count)
+	s = collect(count) // ERROR "append using non-aliased slice: append\(result, v\)"
 	s = append(s, 0)
+}
+
+func iteratorUse3() {
+	s := collect(count) // ERROR "append using non-aliased slice: append\(result, v\)"
+	_ = s
+}
+
+func iteratorUse4() {
+	_ = len(collect(count)) // ERROR "append using non-aliased slice: append\(result, v\)"
+}
+
+// TODO(thepudds): this is an interesting one to double-check more. s is cleared as a candidate
+// with the 'alias = s', but that does not stop the 'result' slice inside collect(count) from being
+// a candidate. 'result' is not a renamed 's', so probably OK. (Contrast with the current
+// appendIteratorUse1d, where an aliased 's' is passed into appendSeq).
+func iteratorUse5new() {
+	var s []int
+	alias = s
+	s = collect(count) // ERROR "append using non-aliased slice: append\(result, v\)"
+	s = append(s, 0)
+}
+
+func iteratorUse6New() {
+	var s []int
+	s = collect(count) // ERROR "append using non-aliased slice: append\(result, v\)"
+	alias = s
+	s = append(s, 0)
+}
+
+//go:noinline
+func countNoInline(yield func(int) bool) {
+	for i := range 10 {
+		if !yield(i) {
+			return
+		}
+	}
+}
+
+func iteratorUse7() {
+	s := collect(countNoInline)
+	_ = s
+}
+
+func iteratorUse8() {
+	s := collect(countNoInline)
+	s = append(s, 0)
+}
+
+func All() Seq[int] {
+	return func(yield func(int) bool) {
+		for i := range 10 {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+}
+
+func iteratorUse9() {
+	_ = collect(All()) // ERROR "append using non-aliased slice"
+}
+
+func iteratorUse10() {
+	seq := func(yield func(int) bool) {
+		for i := range 10 {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	_ = collect(seq) // ERROR "append using non-aliased slice"
+}
+
+// Examples using an append iterator.
+
+func appendSeq[Slice ~[]E, E any](s Slice, seq Seq[E]) Slice {
+	for v := range seq {
+		s = append(s, v)
+	}
+	return s
+}
+
+func appendIteratorUse1a() {
+	var s []int
+	s = appendSeq(s, count) // ERROR "append using non-aliased slice"
+}
+
+func appendIteratorUse1b() {
+	var s []int
+	s = appendSeq(s, count) // ERROR "append using non-aliased slice"
+	s = append(s, 0)        // ERROR "append using non-aliased slice"
+}
+
+func appendIteratorUse1c() {
+	var s []int
+	s2 := appendSeq(s, count)
+	s2 = append(s2, 0)
+}
+
+func appendIteratorUse1d() {
+	var s []int
+	alias = s
+	s = appendSeq(s, count)
+	s = append(s, 0)
+}
+
+func appendIteratorUse1e() {
+	var s []int
+	s = appendSeq(s, count) // ERROR "append using non-aliased slice"
+	alias = s
+	s = append(s, 0)
+}
+
+func appendIteratorUse1f() {
+	var s []int
+	s = appendSeq(s, count) // ERROR "append using non-aliased slice"
+	s = append(s, 0)        // ERROR "append using non-aliased slice"
+	alias = s
+}
+
+// TODO(thepudds): probably could get these working as well. We are probably currently giving up on these
+// due to our currently conservative approach to closures.
+
+func appendIteratorUse2() {
+	var s []int
+	s = appendSeq(s, All())
+}
+
+func appendIteratorUse3a() {
+	var s []int
+	seq := func(yield func(int) bool) {
+		for i := range 10 {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+
+	s = appendSeq(s, seq)
+}
+
+// TODO(thepudds): this works just by moving the declaration of s below the seq closure (compared to 3a).
+
+func appendIteratorUse3b() {
+	seq := func(yield func(int) bool) {
+		for i := range 10 {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+
+	var s []int
+	s = appendSeq(s, seq) // ERROR "append using non-aliased slice"
 }
 
 type Seq[E any] func(yield func(E) bool)
