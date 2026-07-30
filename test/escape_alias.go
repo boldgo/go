@@ -176,6 +176,110 @@ func singleAppend6() {
 	s = append(s, 0)
 }
 
+// Appends in multi-assignments.
+
+func appendInMultiAssignment1() []int {
+	var s, old []int
+	s, old = append(s, 0), s
+	return old
+}
+
+func appendInMultiAssignment2() int {
+	var s []int
+	var n int
+	s, n = append(s, 0), useSliceForMultiAssignment(s)
+	return n
+}
+
+//go:noinline
+func useSliceForMultiAssignment(s []int) int {
+	return len(s)
+}
+
+func appendInMultiAssignment3() ([]int, int) {
+	var s []int
+	var n int
+	s, n = append(s, 0), 1 // ERROR "append using non-aliased slice"
+	return s, n
+}
+
+func appendInMultiAssignment4() ([]int, int) {
+	var s []int
+	var n int
+	n, s = 1, append(s, 0) // ERROR "append using non-aliased slice"
+	return s, n
+}
+
+func appendInMultiAssignment5() ([]int, int) {
+	var s []int
+	var n int
+	s, n = append(s, 0), len(s) // ERROR "append using non-aliased slice"
+	return s, n
+}
+
+func appendInMultiAssignment6() []int {
+	var s []int
+	s, s = append(s, 0), append(s, 1)
+	s = append(s, 2) // ERROR "append using non-aliased slice"
+	return s
+}
+
+func appendInMultiAssignment7() ([]int, []int) {
+	var s, t []int
+	s, t = append(s, 0), // ERROR "append using non-aliased slice"
+		append(t, 1) // ERROR "append using non-aliased slice"
+	return s, t
+}
+
+func appendInMultiAssignment8() []int {
+	s := []int{0}
+	s, s[0] = append(s, 1), 1
+	return s
+}
+
+func appendInMultiAssignment9() ([]int, int) {
+	var s []int
+	var n int
+	n, s = cap(s), append(s, 0) // ERROR "append using non-aliased slice"
+	return s, n
+}
+
+func appendInMultiAssignment10() []int {
+	var s, old []int
+	old, s = s, append(s, 0)
+	return old
+}
+
+func appendInMultiAssignment11(n int) []int {
+	var s []int
+	var last int
+	for range n {
+		for i := range n {
+			s, last = append(s, i), i // ERROR "append using non-aliased slice"
+		}
+	}
+	_ = last
+	return s
+}
+
+func appendInMultiAssignment12(n int) {
+	var s []int
+	var last int
+	for i := range n {
+		s, last = append(s, i), i
+		alias = s
+	}
+	_ = last
+}
+
+func appendInMultiAssignment13() ([]int, []int) {
+	var s, t []int
+	s, s, t = append(s, 0),
+		append(s, 1),
+		append(t, 2) // ERROR "append using non-aliased slice"
+	return s, t
+}
+
 // Examples with variations on slice declarations.
 
 func sliceDeclaration1() {

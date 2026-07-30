@@ -230,6 +230,70 @@ func Append22(n int) int {
 	return Append21(n)[0]
 }
 
+func Append18(n int) ([]int, []int) {
+	var r, old []int
+	for i := range n {
+		// amd64:`.*growslice\b` -`.*growsliceNoAlias\b`
+		r, old = append(r, i), r
+	}
+	return r, old
+}
+
+func Append18b(n int) ([]int, []int) {
+	r := make([]int, n, n)
+	var old []int
+
+	// amd64:`.*growslice(Buf)?\b` -`.*growsliceNoAlias\b`
+	r, old = append(r, n), r
+	return r, old
+}
+
+func Append19(n int) ([]int, int) {
+	var r []int
+	var last int
+	for i := range n {
+		// amd64:`.*growsliceNoAlias\b`
+		r, last = append(r, i), i
+	}
+	return r, last
+}
+
+func Append20(n int) []int {
+	var r []int
+	for i := range n {
+		// amd64:2`.*growslice\b` -`.*growsliceNoAlias\b`
+		r, r = append(r, i), append(r, i+1)
+	}
+	return r
+}
+
+func Append24(n int) ([]int, []int) {
+	var r, s []int
+	for i := range n {
+		// amd64:2`.*growsliceNoAlias\b` -`.*growslice\b`
+		r, s = append(r, i), append(s, i)
+	}
+	return r, s
+}
+
+func Append25(n int) []int {
+	r := []int{0}
+	for i := range n {
+		// amd64:`.*growslice(Buf)?\b` -`.*growsliceNoAlias\b`
+		r, r[0] = append(r, i), i
+	}
+	return r
+}
+
+func Append26(n int) ([]int, []int) {
+	var r, s []int
+	for i := range n {
+		// amd64:2`.*growslice\b` 1`.*growsliceNoAlias\b`
+		r, r, s = append(r, i), append(r, i+1), append(s, i)
+	}
+	return r, s
+}
+
 //go:noinline
 func useSlice(s []int) {
 }

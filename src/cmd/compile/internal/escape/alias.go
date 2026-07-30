@@ -371,6 +371,7 @@ func (aa *aliasAnalysis) visitList(nodes []ir.Node) {
 // assign is an *ir.AssignStmt or *ir.AssignListStmt.
 func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 	aa.visitList(assign.Init())
+	var pendingAppends []candidateAppend
 	for i := range dsts {
 		dst := dsts[i]
 		src := srcs[i]
@@ -439,29 +440,17 @@ func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 				// Mark the call as processed, and s twice.
 				aa.countProcessed(s, call, s)
 
-				// We have now examined all non-ONAME children of assign.
-
-				// This is now the heart of the analysis.
-				// Check to see if this slice is a live candidate.
-				cs, ok := aa.candidateSlices[s]
-				if ok {
-					if cs.loopDepth == len(aa.loops) {
-						// No new loop has started after the declaration of s,
-						// so this is definitive.
-						if base.Debug.EscapeAlias >= 2 {
-							aa.diag(assign.Pos(), assign, "proved non-aliased append",
-								"(loop depth: %d, equals decl depth)", len(aa.loops))
-						}
-						aa.noAliasAppends = append(aa.noAliasAppends, call)
-					} else if cs.loopDepth < len(aa.loops) {
-						// A new loop has started since the declaration of s,
-						// so we can't validate this append yet, but
-						// remember it in case we can validate it later when
-						// all loops using s are done.
-						aa.loops[cs.loopDepth] = append(aa.loops[cs.loopDepth],
-							candidateAppend{s: s, call: call})
+				if _, ok := aa.candidateSlices[s]; ok {
+					a := candidateAppend{s: s, call: call}
+					if len(dsts) == 1 {
+						// Keep the common single-assignment path allocation-free.
+						aa.recordAppend(assign, a)
 					} else {
-						panic("impossible: candidate slice loopDepth > current loop depth")
+						// All RHS expressions and any addressing operands on
+						// the LHS are evaluated before any assignment. Delay
+						// the decision until all other operands have been visited
+						// in case one retains s's old backing array.
+						pendingAppends = append(pendingAppends, a)
 					}
 				}
 				continue
@@ -472,6 +461,52 @@ func (aa *aliasAnalysis) analyzeAssign(assign ir.Node, dsts, srcs []ir.Node) {
 		// If we get here, we need to visit the dst and src normally.
 		aa.visit(dst)
 		aa.visit(src)
+	}
+
+	if len(pendingAppends) == 0 {
+		return
+	}
+	if len(pendingAppends) == 1 {
+		aa.recordAppend(assign, pendingAppends[0])
+		return
+	}
+
+	// Multiple appends using the same slice in one assignment all receive
+	// the pre-assignment slice value. Do not allow any of them to free its
+	// backing array while another append might still use it.
+	appendCounts := make(map[*ir.Name]int, len(pendingAppends))
+	for _, a := range pendingAppends {
+		appendCounts[a.s]++
+	}
+	for _, a := range pendingAppends {
+		if appendCounts[a.s] == 1 {
+			aa.recordAppend(assign, a)
+		}
+	}
+}
+
+// recordAppend records an append if its slice remained unaliased.
+func (aa *aliasAnalysis) recordAppend(assign ir.Node, a candidateAppend) {
+	cs, ok := aa.candidateSlices[a.s]
+	if !ok {
+		return
+	}
+	if cs.loopDepth == len(aa.loops) {
+		// No new loop has started after the declaration of s,
+		// so this is definitive.
+		if base.Debug.EscapeAlias >= 2 {
+			aa.diag(assign.Pos(), assign, "proved non-aliased append",
+				"(loop depth: %d, equals decl depth)", len(aa.loops))
+		}
+		aa.noAliasAppends = append(aa.noAliasAppends, a.call)
+	} else if cs.loopDepth < len(aa.loops) {
+		// A new loop has started since the declaration of s,
+		// so we can't validate this append yet, but
+		// remember it in case we can validate it later when
+		// all loops using s are done.
+		aa.loops[cs.loopDepth] = append(aa.loops[cs.loopDepth], a)
+	} else {
+		panic("impossible: candidate slice loopDepth > current loop depth")
 	}
 }
 
