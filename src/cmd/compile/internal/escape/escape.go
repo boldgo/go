@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
-	"internal/goexperiment"
+	"internal/buildcfg"
 	"slices"
 
 	"cmd/compile/internal/base"
@@ -525,7 +525,7 @@ func (b *batch) finish(fns []*ir.Func) {
 		}
 	}
 
-	if goexperiment.RuntimeFreegc {
+	if buildcfg.Experiment.RuntimeFreegc {
 		// Look for specific patterns of usage, such as appends
 		// to slices that we can prove are not aliased.
 		for _, fn := range fns {

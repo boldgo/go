@@ -12,7 +12,6 @@ import (
 	"go/constant"
 	"html"
 	"internal/buildcfg"
-	"internal/goexperiment"
 	"internal/runtime/gc"
 	"os"
 	"path/filepath"
@@ -4091,7 +4090,7 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 			info.usedStatic = true
 		}
 		fn := ir.Syms.GrowsliceBuf
-		if goexperiment.RuntimeFreegc && n.AppendNoAlias && !et.HasPointers() {
+		if buildcfg.Experiment.RuntimeFreegc && n.AppendNoAlias && !et.HasPointers() {
 			// The append is for a non-aliased slice where the runtime knows how to free
 			// the old logically dead backing store after growth.
 			// TODO(thepudds): for now, we only use the NoAlias version for element types
@@ -4101,7 +4100,7 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 		r = s.rtcall(fn, true, []*types.Type{n.Type()}, p, l, c, nargs, taddr, s.addr(info.store), s.constInt(types.Types[types.TINT], info.K))
 	} else {
 		fn := ir.Syms.Growslice
-		if goexperiment.RuntimeFreegc && n.AppendNoAlias && !et.HasPointers() {
+		if buildcfg.Experiment.RuntimeFreegc && n.AppendNoAlias && !et.HasPointers() {
 			// The append is for a non-aliased slice where the runtime knows how to free
 			// the old logically dead backing store after growth.
 			// TODO(thepudds): for now, we only use the NoAlias version for element types
