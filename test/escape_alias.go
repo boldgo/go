@@ -124,6 +124,21 @@ func basic11() {
 	}
 }
 
+func basicDdd() {
+	var s []byte
+	str := "string"
+	for range 10 {
+		s = append(s, str...) // ERROR "append using non-aliased slice"
+	}
+}
+
+func basicExtend(n int) {
+	var s []int
+	for range 10 {
+		s = append(s, make([]int, n)...) // ERROR "append using non-aliased slice"
+	}
+}
+
 // Some variations on single appends.
 
 func singleAppend1() []int {

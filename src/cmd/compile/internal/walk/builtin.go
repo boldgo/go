@@ -9,6 +9,7 @@ import (
 	"go/constant"
 	"go/token"
 	"internal/abi"
+	"internal/buildcfg"
 	"strings"
 
 	"cmd/compile/internal/base"
@@ -104,7 +105,7 @@ func (w *walkState) walkAppend(n *ir.CallExpr, init *ir.Nodes, dst ir.Node) ir.N
 
 	// else { s = growslice(s.ptr, n, s.cap, a, T) }
 	nif.Else = []ir.Node{
-		ir.NewAssignStmt(base.Pos, s, w.walkGrowslice(s, nif.PtrInit(),
+		ir.NewAssignStmt(base.Pos, s, w.walkGrowslice(n, s, nif.PtrInit(),
 			ir.NewUnaryExpr(base.Pos, ir.OSPTR, s),
 			newLen,
 			ir.NewUnaryExpr(base.Pos, ir.OCAP, s),
@@ -128,10 +129,17 @@ func (w *walkState) walkAppend(n *ir.CallExpr, init *ir.Nodes, dst ir.Node) ir.N
 }
 
 // growslice(ptr *T, newLen, oldCap, num int, <type>) (ret []T)
-func (w *walkState) walkGrowslice(slice *ir.Name, init *ir.Nodes, oldPtr, newLen, oldCap, num ir.Node) *ir.CallExpr {
+func (w *walkState) walkGrowslice(n *ir.CallExpr, slice *ir.Name, init *ir.Nodes, oldPtr, newLen, oldCap, num ir.Node) *ir.CallExpr {
 	elemtype := slice.Type().Elem()
 	fn := typecheck.LookupRuntime("growslice", elemtype, elemtype)
 	elemtypeptr := reflectdata.TypePtrAt(w.curfunc, base.Pos, elemtype)
+	if buildcfg.Experiment.RuntimeFreegc && n.AppendNoAlias && !slice.Type().Elem().HasPointers() {
+		// The append is for a non-aliased slice where the runtime knows how to free
+		// the old logically dead backing store after growth.
+		// TODO(thepudds): for now, we only use the NoAlias version for element types
+		// without pointers while waiting on additional runtime support (CL 698515).
+		fn = typecheck.LookupRuntime("growsliceNoAlias", elemtype, elemtype)
+	}
 	return w.mkcall1(fn, slice.Type(), init, oldPtr, newLen, oldCap, num, elemtypeptr)
 }
 
