@@ -64,6 +64,11 @@ type mcache struct {
 	// This helps reduce use of fixalloc..
 	reusableLinkCache *reusableLink
 
+	// reusableLarge holds large pointer-free spans freed by freegc, oldest
+	// first. See freegclarge.go.
+	reusableLarge  [reusableLargeSpans]*mspan
+	reusableLargeN int
+
 	// Counts of objects freed by freegc and of allocations satisfied by
 	// reusing them, along with their slot sizes in bytes. Flushed to
 	// memstats.heapStats in releaseAll.
@@ -678,6 +683,8 @@ func (c *mcache) dropReusableLists() {
 	// is stored in the heap objects themselves, so we can just
 	// wipe the heads.
 	clear(c.reusableListsNoScan.lists[:])
+	clear(c.reusableLarge[:])
+	c.reusableLargeN = 0
 
 	// Clearing the scan lists currently requires iterating over
 	// the different size classes, and we store the reusableLinks

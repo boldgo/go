@@ -1791,6 +1791,15 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 	mp.mallocing = 1
 
 	c := getMCache(mp)
+	if runtimeFreegcEnabled && c.reusableLargeN > 0 && (typ == nil || !typ.Pointers()) {
+		npages := size >> gc.PageShift
+		if size&pageMask != 0 {
+			npages++
+		}
+		if s := c.takeReusableLarge(npages); s != nil {
+			return mallocgcLargeReuse(mp, c, s, size, needzero)
+		}
+	}
 	// For large allocations, keep track of zeroed state so that
 	// bulk zeroing can be happen later in a preemptible context.
 	span := c.allocLarge(size, typ == nil || !typ.Pointers())
@@ -2013,6 +2022,9 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 		return
 	}
 	if !reusableSize(size) {
+		if noscan && size > maxSmallSize-mallocHeaderSize {
+			freegcLarge(ptr)
+		}
 		return
 	}
 
