@@ -492,6 +492,41 @@ var ptrTests = []ptrTest{
 		fail:    true,
 	},
 	{
+		// Passing addresses of several elements of an array that
+		// contains a Go pointer; the array is checked once.
+		name:    "arraydup1",
+		c:       `void f48(void** p, void** q) {}`,
+		imports: []string{"unsafe"},
+		body:    `i := 0; a := [2]unsafe.Pointer{nil, unsafe.Pointer(&i)}; C.f48(&a[0], &a[1])`,
+		fail:    true,
+	},
+	{
+		// As above, through a pointer to the array.
+		name:    "arraydup2",
+		c:       `void f49(void** p, void** q) {}`,
+		imports: []string{"unsafe"},
+		body:    `i := 0; a := &[2]unsafe.Pointer{nil, unsafe.Pointer(&i)}; C.f49(&a[1], &a[0])`,
+		fail:    true,
+	},
+	{
+		// Passing addresses of several elements of a slice with
+		// no Go pointers.
+		name:    "slicedupok",
+		c:       `void f50(void** p, void** q, void** r) {}`,
+		imports: []string{"unsafe"},
+		body:    `s := make([]unsafe.Pointer, 3); C.f50(&s[0], &s[1], &s[2])`,
+		fail:    false,
+	},
+	{
+		// A second array is still checked after the first one
+		// passes.
+		name:    "arraydup3",
+		c:       `void f51(void** p, void** q, void** r) {}`,
+		imports: []string{"unsafe"},
+		body:    `i := 0; a := [2]unsafe.Pointer{}; b := [1]unsafe.Pointer{unsafe.Pointer(&i)}; C.f51(&a[0], &a[1], &b[0])`,
+		fail:    true,
+	},
+	{
 		// Passing a Go map as argument to C.
 		name:          "argmap",
 		c:             `void f46(void* p) {}`,

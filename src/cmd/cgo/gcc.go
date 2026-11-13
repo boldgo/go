@@ -975,6 +975,7 @@ func (p *Package) rewriteCall(f *File, call *Call) (string, bool) {
 	// Define _cgoN for each argument value.
 	// Write _cgoCheckPointer calls to sbCheck.
 	var sbCheck bytes.Buffer
+	indexed := make(map[string]int) // checkIndex: variable name -> first argument checked
 	for i, param := range params {
 		origArg := args[i]
 		arg, nu := p.mangle(f, &args[i], true)
@@ -996,7 +997,7 @@ func (p *Package) rewriteCall(f *File, call *Call) (string, bool) {
 		}
 
 		// Check for &a[i].
-		if p.checkIndex(&sb, &sbCheck, arg, i) {
+		if p.checkIndex(&sb, &sbCheck, arg, i, indexed) {
 			continue
 		}
 
@@ -1226,7 +1227,14 @@ func (p *Package) mangle(f *File, arg *ast.Expr, addPosition bool) (ast.Expr, bo
 //
 // This tells _cgoCheckPointer to check the complete contents of the
 // slice or array being indexed, but no other part of the memory allocation.
-func (p *Package) checkIndex(sb, sbCheck *bytes.Buffer, arg ast.Expr, i int) bool {
+//
+// If a is a variable name that an earlier argument of the same call also
+// indexed, recorded in indexed, the check is not repeated: all checks run
+// after every argument is evaluated, and both would check the same
+// variable's contents, so they would reach the same result. This matters
+// for calls such as C.f(&a[0], &a[1], ...), which otherwise check all of a
+// once per argument.
+func (p *Package) checkIndex(sb, sbCheck *bytes.Buffer, arg ast.Expr, i int, indexed map[string]int) bool {
 	// Strip type conversions.
 	x := arg
 	for {
@@ -1253,6 +1261,17 @@ func (p *Package) checkIndex(sb, sbCheck *bytes.Buffer, arg ast.Expr, i int) boo
 	if p.isVariable(index.X) {
 		addr = "&"
 		deref = "*"
+	}
+
+	if id, ok := index.X.(*ast.Ident); ok && deref == "*" {
+		if first, ok := indexed[id.Name]; ok {
+			origX := index.X
+			index.X = &ast.StarExpr{X: ast.NewIdent(fmt.Sprintf("_cgoIndex%d", first))}
+			fmt.Fprintf(sb, "_cgo%d := %s; ", i, gofmtPos(arg, arg.Pos()))
+			index.X = origX
+			return true
+		}
+		indexed[id.Name] = i
 	}
 
 	fmt.Fprintf(sb, "_cgoIndex%d := %s%s; ", i, addr, gofmtPos(index.X, index.X.Pos()))
