@@ -118,3 +118,26 @@ func TestFreegcCreditsHeapLive(t *testing.T) {
 		return
 	}
 }
+
+func TestFreegcProfiled(t *testing.T) {
+	skipUnlessFreegcReuses(t)
+	defer func(old int) { runtime.MemProfileRate = old }(runtime.MemProfileRate)
+	runtime.MemProfileRate = 1 // sample every allocation, including reuses
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+	for _, size := range []int{64, 100 << 10} {
+		for range 200 {
+			b := make([]byte, size)
+			largeSink = b
+			largeSink = nil
+			runtime.Freegc(unsafe.Pointer(unsafe.SliceData(b)), uintptr(size), true)
+			// Reusing the slot samples it again; the free must have
+			// ended the old profile record.
+			largeSink = make([]byte, size)
+		}
+	}
+	largeSink = nil
+	runtime.GC()
+}

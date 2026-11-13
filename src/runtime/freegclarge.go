@@ -43,6 +43,11 @@ func freegcLarge(ptr unsafe.Pointer) {
 		return
 	}
 	mp.mallocing = 1
+	if debug.freegccheck == 0 && !freegcSpecials(uintptr(ptr), s.elemsize) {
+		mp.mallocing = 0
+		releasem(mp)
+		return
+	}
 	c := getMCache(mp)
 	if c == nil {
 		throw("freegc called without a P or outside bootstrapping")
@@ -91,6 +96,7 @@ func mallocgcLargeReuse(mp *m, c *mcache, s *mspan, size uintptr, needzero bool)
 	c.explicitReuses++
 	c.explicitReuseBytes += s.elemsize
 	c.creditHeapLive(int64(s.elemsize))
+	c.sampleReuse(mp, x, s.elemsize)
 
 	// mallocgc charges the full span against the assist budget, but this
 	// memory is already accounted for in heapLive, as on the small-object

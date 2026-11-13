@@ -1339,6 +1339,7 @@ func mallocgcSmallNoscan(size uintptr, typ *_type, needzero bool) (unsafe.Pointe
 	if runtimeFreegcEnabled && c.hasReusableNoscan(spc) {
 		// We have a reusable object, use it.
 		x := mallocgcSmallNoscanReuse(c, span, spc, size, needzero)
+		c.sampleReuse(mp, x, size)
 		mp.mallocing = 0
 		releasem(mp)
 		return x, size
@@ -1489,6 +1490,7 @@ func mallocgcSmallScanNoHeader(size uintptr, typ *_type) (unsafe.Pointer, uintpt
 			// We sometimes will not find a suitable object, which is
 			// why if x==nil we continue on the normal non-reuse alloc path below .
 			// See the comments in mallocgcSmallScanNoHeaderReuse for more details.
+			c.sampleReuse(mp, x, reuseSize)
 			mp.mallocing = 0
 			releasem(mp)
 			return x, reuseSize
@@ -1663,6 +1665,7 @@ func mallocgcSmallScanHeader(size uintptr, typ *_type) (unsafe.Pointer, uintptr)
 	if runtimeFreegcEnabled && !writeBarrier.enabled && c.hasReusableScan(spc) {
 		// We have a reusable object, use it.
 		x := mallocgcSmallScanHeaderReuse(c, span, spc, size, typ)
+		c.sampleReuse(mp, x, size)
 		mp.mallocing = 0
 		releasem(mp)
 		return x, size
@@ -2048,6 +2051,11 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 		throw("freegc during signal")
 	}
 	mp.mallocing = 1
+	if debug.freegccheck == 0 && !freegcSpecials(uintptr(ptr), size) {
+		mp.mallocing = 0
+		releasem(mp)
+		return
+	}
 
 	if doubleCheckReusable {
 		// TODO(thepudds): we could enforce no free on globals in bss or data. Maybe by
