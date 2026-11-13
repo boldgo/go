@@ -312,8 +312,14 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 		ssagen.EnableNoWriteBarrierRecCheck()
 	}
 
-	base.Timer.Start("fe", "dumpexport")
-	dumpexport()
+	// Under GOEXPERIMENT=runtimefreegc, the export data records which
+	// results the SSA ownership pass proved fresh, so it must wait for
+	// the backend.
+	exportLate := buildcfg.Experiment.RuntimeFreegc && base.Flag.N == 0
+	if !exportLate {
+		base.Timer.Start("fe", "dumpexport")
+		dumpexport()
+	}
 
 	reflectdata.WriteBasicTypes()
 
@@ -388,6 +394,11 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	// Add keep relocations for global maps.
 	if base.Debug.WrapGlobalMapCtl != 1 {
 		staticinit.AddKeepRelocations()
+	}
+
+	if exportLate {
+		base.Timer.Start("be", "dumpexport")
+		dumpexport()
 	}
 
 	// Write object data to disk.

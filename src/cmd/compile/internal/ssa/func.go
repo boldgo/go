@@ -85,6 +85,12 @@ type Func struct {
 	// found the callee does not retain. Set under GOEXPERIMENT=runtimefreegc
 	// for the ownership pass.
 	NoEscapeParams map[*Value]uint64
+	// FreshCalls maps a static call to an imported function to the
+	// callee's FreshResults.
+	FreshCalls map[*Value]uint64
+	// FreshResults, if not nil, receives the bit set of this function's
+	// results that the ownership pass proves fresh.
+	FreshResults *uint64
 	// CloSlot holds the compiler-synthesized name (".closureptr")
 	// where we spill the closure pointer for range func bodies.
 	CloSlot *ir.Name

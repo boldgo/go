@@ -91,6 +91,12 @@ type Func struct {
 	// returns. Populated during walk under GOEXPERIMENT=runtimefreegc.
 	FreegcScope []*Name
 
+	// FreshResults has bit i set if result i is a pointer-free slice or
+	// a string that the function always returns as the only reference to
+	// a new allocation, as proven by the SSA ownership pass. Under
+	// GOEXPERIMENT=runtimefreegc it is exported for other packages.
+	FreshResults uint64
+
 	// Parent of a closure
 	ClosureParent *Func
 

@@ -506,6 +506,9 @@ func buildssa(compiler ssa.Compiler, fn *ir.Func, worker int, isPgoHot bool) (*s
 	}
 
 	s.f.OwnAux = ssa.OwnAuxCall(fn.LSym, params)
+	if buildcfg.Experiment.RuntimeFreegc && fn.Sym().Pkg == types.LocalPkg && !fn.Type().HasShape() {
+		s.f.FreshResults = &fn.FreshResults
+	}
 
 	// Populate SSAable arguments.
 	for _, n := range fn.Dcl {
@@ -5236,6 +5239,7 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		call.AuxInt = stksize // Call operations carry the argsize of the callee along with them
 		if buildcfg.Experiment.RuntimeFreegc && call.Op == ssaop.OpStaticLECall && calleeLSym != nil {
 			s.recordNoEscapeParams(call, n.Fun.Type())
+			s.recordFreshCall(call, n.Fun)
 		}
 	}
 	s.prevCall = call
@@ -8271,6 +8275,20 @@ func (s *state) recordNoEscapeParams(call *ssa.Value, ft *types.Type) {
 		s.f.NoEscapeParams = make(map[*ssa.Value]uint64)
 	}
 	s.f.NoEscapeParams[call] = mask
+}
+
+// recordFreshCall records which results of a static call's callee are
+// fresh allocations, for the SSA ownership pass. Only facts from export
+// data are used: this package's functions are being compiled concurrently.
+func (s *state) recordFreshCall(call *ssa.Value, fun ir.Node) {
+	fn, ok := fun.(*ir.Name)
+	if !ok || fn.Func == nil || fn.Sym().Pkg == types.LocalPkg || fn.Func.FreshResults == 0 {
+		return
+	}
+	if s.f.FreshCalls == nil {
+		s.f.FreshCalls = make(map[*ssa.Value]uint64)
+	}
+	s.f.FreshCalls[call] = fn.Func.FreshResults
 }
 
 // freegcScope frees the objects still held in the function's FreegcScope

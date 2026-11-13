@@ -1,0 +1,12 @@
+// rundir
+
+//go:build goexperiment.runtimefreegc
+
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Test that extending or freeing results that another package returns as
+// fresh never changes memory that package still uses.
+
+package ignored

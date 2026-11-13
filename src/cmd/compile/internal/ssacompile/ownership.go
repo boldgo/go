@@ -8,7 +8,9 @@ import (
 	"cmd/compile/internal/base"
 	"cmd/compile/internal/ir"
 	"cmd/compile/internal/ssa"
+	"cmd/compile/internal/ssa/block"
 	"cmd/compile/internal/ssa/ssaop"
+	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 )
 
@@ -66,9 +68,6 @@ func ownership(f *ssa.Func) {
 			}
 		}
 	}
-	if len(cands) == 0 {
-		return
-	}
 	o := &ownState{f: f}
 	for _, g := range cands {
 		if g.Block == nil || !isStaticCall(g) {
@@ -98,6 +97,9 @@ func ownership(f *ssa.Func) {
 		if base.Debug.FreegcSSA >= 2 {
 			f.Warnl(g.Pos, "ssa ownership: frees %s", what)
 		}
+	}
+	if f.FreshResults != nil {
+		*f.FreshResults = o.freshResults()
 	}
 }
 
@@ -161,25 +163,7 @@ func (o *ownState) check(g *ssa.Value, d ownedCall) string {
 		return "old backing store is never on the heap"
 	}
 
-	// Collect the aliases: values that may point into a root's allocation.
-	alias := make(map[ssa.ID]int)
-	var aliases []*ssa.Value
-	add := func(v *ssa.Value) {
-		if _, ok := alias[v.ID]; !ok {
-			alias[v.ID] = len(aliases)
-			aliases = append(aliases, v)
-		}
-	}
-	for _, r := range roots {
-		add(r)
-	}
-	for i := 0; i < len(aliases); i++ {
-		for _, u := range o.users[aliases[i].ID] {
-			if derivesPointer(u.Op) {
-				add(u)
-			}
-		}
-	}
+	aliases, alias := o.aliasesOf(roots)
 
 	after := o.after(g)
 	reach := reachesBlock(o.f, g.Block)
@@ -217,6 +201,132 @@ func (o *ownState) check(g *ssa.Value, d ownedCall) string {
 		}
 	}
 	return ""
+}
+
+// aliasesOf returns the values that may point into one of the roots'
+// allocations, and the index of each in that list.
+func (o *ownState) aliasesOf(roots []*ssa.Value) ([]*ssa.Value, map[ssa.ID]int) {
+	alias := make(map[ssa.ID]int)
+	var aliases []*ssa.Value
+	add := func(v *ssa.Value) {
+		if _, ok := alias[v.ID]; !ok {
+			alias[v.ID] = len(aliases)
+			aliases = append(aliases, v)
+		}
+	}
+	for _, r := range roots {
+		add(r)
+	}
+	for i := 0; i < len(aliases); i++ {
+		for _, u := range o.users[aliases[i].ID] {
+			if derivesPointer(u.Op) {
+				add(u)
+			}
+		}
+	}
+	return aliases, alias
+}
+
+// freshResults returns the bit set of f's results that are fresh: on
+// every return, a pointer-free slice whose pointer and capacity, or a
+// string whose pointer and length, pass origins, and whose allocations
+// are used only by derived pointers, by calls that borrow them, and as
+// that one result. A caller in another package may then treat the result
+// as an allocation it owns.
+func (o *ownState) freshResults() uint64 {
+	var rets []*ssa.Value
+	for _, b := range o.f.Blocks {
+		switch b.Kind {
+		case block.BlockRet:
+			c := b.Controls[0]
+			if c == nil || c.Op != ssaop.OpMakeResult {
+				return 0
+			}
+			rets = append(rets, c)
+		case block.BlockRetJmp:
+			return 0
+		}
+	}
+	if len(rets) == 0 {
+		return 0
+	}
+	var mask uint64
+	k := 0
+	for i, r := range o.f.OwnAux.AbiInfo.OutParams() {
+		ptr := k
+		k += len(r.Registers)
+		sizeReg, str, ok := ownedShape(r.Type)
+		if !ok || i >= 64 || len(r.Registers) == 0 {
+			continue
+		}
+		pos := rets[0].Pos // the first return
+		if why := o.freshResult(rets, ptr, ptr+int(sizeReg), ownedCall{str: str}); why != "" {
+			if base.Debug.FreegcFresh >= 2 {
+				o.f.Warnl(pos, "ssa ownership: result %d is not fresh: %s", i, why)
+			}
+			continue
+		}
+		mask |= 1 << i
+		if base.Debug.FreegcFresh >= 1 {
+			o.f.Warnl(pos, "ssa ownership: result %d is fresh", i)
+		}
+	}
+	return mask
+}
+
+// freshResult reports why the result in registers ptr (its pointer) and
+// size (its capacity or length) of the MakeResults rets may not be
+// fresh, or "" if it is.
+func (o *ownState) freshResult(rets []*ssa.Value, ptr, size int, d ownedCall) string {
+	var roots []*ssa.Value
+	for _, m := range rets {
+		rs, why := o.origins(m.Args[ptr], m.Args[size], nil, d)
+		if why != "" {
+			return why
+		}
+		roots = append(roots, rs...)
+	}
+	if len(roots) == 0 {
+		return "never on the heap"
+	}
+	if o.users == nil {
+		o.init()
+	}
+	aliases, _ := o.aliasesOf(roots)
+	for _, a := range aliases {
+		if len(o.ctrls[a.ID]) > 0 {
+			return "pointer used as a block control"
+		}
+		for _, u := range o.users[a.ID] {
+			switch {
+			case u.Op == ssaop.OpMakeResult:
+				for j, x := range u.Args {
+					if x == a && j != ptr {
+						return "also returned as another result"
+					}
+				}
+			case isStaticCall(u) && u.Aux.(*ssa.AuxCall).Fn.Name == "runtime.freegc":
+				return "freed when its scope ends"
+			case derivesPointer(u.Op), o.borrows(u, a):
+			default:
+				return "pointer escapes: " + escapeString(u)
+			}
+		}
+	}
+	return ""
+}
+
+// ownedShape reports whether a value of type t can be owned: a string, or
+// a slice of pointer-free elements. sizeReg is the register, after the
+// pointer's, that holds the length or the capacity.
+func ownedShape(t *types.Type) (sizeReg int64, str, ok bool) {
+	switch {
+	case t.IsString():
+		return 1, true, true
+	case t.IsSlice() && !t.Elem().HasPointers():
+		return 2, false, true
+	}
+	return 0, false, false
 }
 
 // origins follows a slice pointer p and capacity c, or a string pointer p
@@ -276,11 +386,41 @@ func (o *ownState) origins(p, c, g *ssa.Value, d ownedCall) (roots []*ssa.Value,
 				if p.AuxInt != 0 || c.Op != ssaop.OpSelectN || c.AuxInt != 1 || c.Args[0] != call {
 					return nil, "length is not that of the string"
 				}
+			} else if bits := o.f.FreshCalls[call]; bits != 0 {
+				i, t := resultAt(call.Aux.(*ssa.AuxCall), p.AuxInt)
+				if i < 0 || i >= 64 || bits&(1<<i) == 0 {
+					return nil, "result of " + fn.Name + " is not fresh"
+				}
+				sizeReg, str, ok := ownedShape(t)
+				if !ok || str != d.str || c.Op != ssaop.OpSelectN || c.Args[0] != call || c.AuxInt != p.AuxInt+sizeReg {
+					return nil, "capacity is not that of the allocation"
+				}
 			} else {
-				if d.str || p.AuxInt != 0 || (fn.Name != "runtime.makeslice" && fn.Name != "runtime.makeslice64") || len(call.Args) != 4 {
+				capArg := 2
+				switch {
+				case d.str || p.AuxInt != 0:
+					return nil, "pointer comes from " + fn.Name
+				case (fn.Name == "runtime.makeslice" || fn.Name == "runtime.makeslice64") && len(call.Args) == 4:
+				case fn.Name == "runtime.makeslicecopy" && len(call.Args) == 5:
+					capArg = 1 // makeslicecopy(et, tolen, fromlen, from)
+				case movedSlice[fn.Name]:
+					// The results are (ptr, len, cap) of a new copy.
+					capArg = -1
+					if c.Op != ssaop.OpSelectN || c.AuxInt != 2 || c.Args[0] != call {
+						return nil, "capacity is not that of the allocation"
+					}
+				case fn.Name == "runtime.mallocgc" && len(call.Args) == 4:
+					// make+copy of pointer-free elements: mallocgc(cap *
+					// elemSize, nil, false). freegc frees nothing if the
+					// size it is given does not match the object.
+					capArg = -1
+					if !isMulOf(stripCopies(call.Args[0]), c) {
+						return nil, "capacity is not that of the allocation"
+					}
+				default:
 					return nil, "pointer comes from " + fn.Name
 				}
-				if stripCopies(call.Args[2]) != c {
+				if capArg >= 0 && stripCopies(call.Args[capArg]) != c {
 					return nil, "capacity is not that of the allocation"
 				}
 			}
@@ -332,6 +472,10 @@ func (o *ownState) borrows(u, a *ssa.Value) bool {
 	case ssaop.OpEqPtr, ssaop.OpNeqPtr, ssaop.OpIsNonNil,
 		ssaop.OpSliceLen, ssaop.OpSliceCap, ssaop.OpStringLen:
 		return true
+	case ssaop.OpConvert:
+		// A conversion to an integer used only to compute and compare
+		// integers, such as the check whether a slice is on the stack.
+		return !u.Type.IsPtrShaped() && o.onlyCompared(u)
 	case ssaop.OpStaticCall, ssaop.OpStaticLECall:
 		fn := u.Aux.(*ssa.AuxCall).Fn
 		if d, ok := ownedCallOf(fn); ok {
@@ -350,6 +494,25 @@ func (o *ownState) borrows(u, a *ssa.Value) bool {
 		return o.paramsDoNotRetain(u, a)
 	}
 	return false
+}
+
+// onlyCompared reports whether the integer v is used only in integer
+// arithmetic whose results are only compared, so that no pointer can be
+// rebuilt from it.
+func (o *ownState) onlyCompared(v *ssa.Value) bool {
+	for _, u := range o.users[v.ID] {
+		switch u.Op {
+		case ssaop.OpEq64, ssaop.OpNeq64, ssaop.OpLess64, ssaop.OpLess64U, ssaop.OpLeq64, ssaop.OpLeq64U,
+			ssaop.OpEq32, ssaop.OpNeq32, ssaop.OpLess32, ssaop.OpLess32U, ssaop.OpLeq32, ssaop.OpLeq32U:
+		case ssaop.OpAdd64, ssaop.OpSub64, ssaop.OpAnd64, ssaop.OpAdd32, ssaop.OpSub32, ssaop.OpAnd32:
+			if !o.onlyCompared(u) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(o.ctrls[v.ID]) == 0
 }
 
 // paramsDoNotRetain reports whether every argument of call u that is a
@@ -385,6 +548,47 @@ var nonRetaining = map[string]bool{
 	"runtime.makeslicecopy":        true,
 	"runtime.stringtoslicebyte":    true,
 	"runtime.stringtoslicerune":    true,
+	// The moveSlice functions copy old; with no capacity they return nil
+	// or zerobase, never old.
+	"runtime.moveSlice":            true,
+	"runtime.moveSliceNoScan":      true,
+	"runtime.moveSliceNoCap":       true,
+	"runtime.moveSliceNoCapNoScan": true,
+}
+
+// movedSlice lists the runtime calls that move a slice built on the stack
+// to a new heap object, returning its pointer, length and capacity.
+var movedSlice = map[string]bool{
+	"runtime.moveSlice":            true,
+	"runtime.moveSliceNoScan":      true,
+	"runtime.moveSliceNoCap":       true,
+	"runtime.moveSliceNoCapNoScan": true,
+}
+
+// isMulOf reports whether size is n, or n times a constant.
+func isMulOf(size, n *ssa.Value) bool {
+	if size == n {
+		return true
+	}
+	if size.Op != ssaop.OpMul64 && size.Op != ssaop.OpMul32 {
+		return false
+	}
+	isConst := func(v *ssa.Value) bool { return v.Op == ssaop.OpConst64 || v.Op == ssaop.OpConst32 }
+	x, y := stripCopies(size.Args[0]), stripCopies(size.Args[1])
+	return x == n && isConst(y) || y == n && isConst(x)
+}
+
+// resultAt returns the index and type of the result of call aux whose
+// first register is r, or -1.
+func resultAt(aux *ssa.AuxCall, r int64) (int, *types.Type) {
+	k := int64(0)
+	for i, p := range aux.AbiInfo.OutParams() {
+		if k == r && len(p.Registers) > 0 {
+			return i, p.Type
+		}
+		k += int64(len(p.Registers))
+	}
+	return -1, nil
 }
 
 // freshString lists runtime calls whose string result is always a new

@@ -1254,6 +1254,9 @@ func (r *reader) funcExt(name *ir.Name, method *types.Sym) {
 		for _, f := range name.Type().RecvParams() {
 			f.Note = r.String()
 		}
+		if buildcfg.Experiment.RuntimeFreegc {
+			fn.FreshResults = r.Uint64()
+		}
 
 		if r.Bool() {
 			fn.Inl = &ir.Inline{
