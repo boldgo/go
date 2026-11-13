@@ -143,6 +143,7 @@ var builtins = [...]struct {
 	{"runtime.growsliceBuf", 1},
 	{"runtime.growsliceBufNoAlias", 1},
 	{"runtime.growsliceNoAlias", 1},
+	{"runtime.freegc", 1},
 	{"runtime.unsafeslicecheckptr", 1},
 	{"runtime.panicunsafeslicelen", 1},
 	{"runtime.panicunsafeslicenilptr", 1},

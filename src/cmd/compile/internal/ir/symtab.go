@@ -26,6 +26,7 @@ type symsStruct struct {
 	Deferreturn               *obj.LSym
 	Duffcopy                  *obj.LSym
 	Duffzero                  *obj.LSym
+	Freegc                    *obj.LSym
 	GCWriteBarrier            [8]*obj.LSym
 	Goschedguarded            *obj.LSym
 	Growslice                 *obj.LSym

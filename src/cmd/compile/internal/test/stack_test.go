@@ -5,6 +5,10 @@
 package test
 
 import (
+	"internal/asan"
+	"internal/goexperiment"
+	"internal/msan"
+	"internal/race"
 	"internal/testenv"
 	"testing"
 	"unsafe"
@@ -23,8 +27,9 @@ func TestStackAllocation(t *testing.T) {
 	testenv.SkipIfOptimizationOff(t)
 
 	type testCase struct {
-		f        func(int)
-		elemSize uintptr
+		f           func(int)
+		elemSize    uintptr
+		hasPointers bool
 	}
 
 	for _, tc := range []testCase{
@@ -38,13 +43,15 @@ func TestStackAllocation(t *testing.T) {
 			f: func(n int) {
 				genericUse(make([]*byte, n))
 			},
-			elemSize: unsafe.Sizeof((*byte)(nil)),
+			elemSize:    unsafe.Sizeof((*byte)(nil)),
+			hasPointers: true,
 		},
 		{
 			f: func(n int) {
 				genericUse(make([]string, n))
 			},
-			elemSize: unsafe.Sizeof(""),
+			elemSize:    unsafe.Sizeof(""),
+			hasPointers: true,
 		},
 	} {
 		max := maxStackSize / int(tc.elemSize)
@@ -53,10 +60,16 @@ func TestStackAllocation(t *testing.T) {
 		}); n != 0 {
 			t.Fatalf("unexpected allocation: %f", n)
 		}
+		want := 1.0
+		if goexperiment.RuntimeFreegc && !tc.hasPointers && !race.Enabled && !asan.Enabled && !msan.Enabled {
+			// The heap object is freed when f returns, so the next run
+			// reuses it.
+			want = 0
+		}
 		if n := testing.AllocsPerRun(10, func() {
 			tc.f(max + 1)
-		}); n != 1 {
-			t.Fatalf("unexpected allocation: %f", n)
+		}); n != want {
+			t.Fatalf("unexpected allocation: %f, want %f", n, want)
 		}
 	}
 }

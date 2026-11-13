@@ -132,6 +132,7 @@ func InitConfig(config *ssa.Config) {
 	ir.Syms.GCWriteBarrier[6] = typecheck.LookupRuntimeFunc("gcWriteBarrier7")
 	ir.Syms.GCWriteBarrier[7] = typecheck.LookupRuntimeFunc("gcWriteBarrier8")
 	ir.Syms.Goschedguarded = typecheck.LookupRuntimeFunc("goschedguarded")
+	ir.Syms.Freegc = typecheck.LookupRuntimeFunc("freegc")
 	ir.Syms.Growslice = typecheck.LookupRuntimeFunc("growslice")
 	ir.Syms.GrowsliceBuf = typecheck.LookupRuntimeFunc("growsliceBuf")
 	ir.Syms.GrowsliceBufNoAlias = typecheck.LookupRuntimeFunc("growsliceBufNoAlias")
@@ -581,6 +582,9 @@ func buildssa(compiler ssa.Compiler, fn *ir.Func, worker int, isPgoHot bool) (*s
 	}
 	s.zeroResults()
 	s.paramsToHeap()
+	for _, n := range fn.FreegcScope {
+		s.assign(n, s.zeroVal(n.Type()), false, 0)
+	}
 	s.stmtList(fn.Body)
 
 	// fallthrough to exit
@@ -2422,6 +2426,13 @@ func (s *state) exit() *ssa.Block {
 			s.rtcall(ir.Syms.Deferreturn, true, nil)
 			s.popLine()
 		}
+	}
+
+	// A recovered panic resumes at deferreturn, where the temporaries'
+	// values are not reliable, so functions with defers leave their last
+	// objects to the GC.
+	if !s.hasdefer {
+		s.freegcScope()
 	}
 
 	// Do actual return.
@@ -8256,4 +8267,28 @@ func (s *state) recordNoEscapeParams(call *ssa.Value, ft *types.Type) {
 		s.f.NoEscapeParams = make(map[*ssa.Value]uint64)
 	}
 	s.f.NoEscapeParams[call] = mask
+}
+
+// freegcScope frees the objects still held in the function's FreegcScope
+// temporaries (see walkMakeSlice): on return, no make's object can still
+// be referenced.
+func (s *state) freegcScope() {
+	scope := s.curfn.FreegcScope
+	for i := 0; i+1 < len(scope); i += 2 {
+		p := s.expr(scope[i])
+		size := s.expr(scope[i+1])
+		cmp := s.newValue2(ssaop.OpNeqPtr, types.Types[types.TBOOL], p, s.constNil(p.Type))
+		b := s.endBlock()
+		b.Kind = block.BlockIf
+		b.Likely = ssa.BranchUnlikely
+		b.SetControl(cmp)
+		bFree := s.f.NewBlock(block.BlockPlain)
+		bNext := s.f.NewBlock(block.BlockPlain)
+		b.AddEdgeTo(bFree)
+		b.AddEdgeTo(bNext)
+		s.startBlock(bFree)
+		s.rtcall(ir.Syms.Freegc, true, nil, p, size, s.constBool(true))
+		s.endBlock().AddEdgeTo(bNext)
+		s.startBlock(bNext)
+	}
 }

@@ -33,6 +33,11 @@ type walkState struct {
 	// the shape type of the OCONVIFACE expression that is its single
 	// static value, if any.
 	shapeConvSources map[*ir.Name]*types.Type
+
+	// appendedMakes holds the makes assigned to a variable that is also
+	// appended to. Their objects are left to the SSA ownership pass, which
+	// can free them when an append grows them, rather than to FreegcScope.
+	appendedMakes map[*ir.MakeExpr]bool
 }
 
 // autoLabel generates a new Name node for use with
@@ -493,8 +498,32 @@ func (w *walkState) analyzePreWalk(fn *ir.Func) {
 	sv := make(map[ir.Node]ir.Node)
 	scs := make(map[*ir.Name]*types.Type)
 	var numNodes int32
+	var appended map[*ir.Name]bool
+	var made map[*ir.MakeExpr]*ir.Name
+	trackMakes := freegcScopeEnabled(fn)
 	ir.Visit(fn, func(n ir.Node) {
 		numNodes++
+		if trackMakes {
+			switch n.Op() {
+			case ir.OAPPEND:
+				if x, ok := n.(*ir.CallExpr).Args[0].(*ir.Name); ok {
+					if appended == nil {
+						appended = make(map[*ir.Name]bool)
+					}
+					appended[x.Canonical()] = true
+				}
+			case ir.OAS:
+				n := n.(*ir.AssignStmt)
+				x, ok1 := n.X.(*ir.Name)
+				m, ok2 := n.Y.(*ir.MakeExpr)
+				if ok1 && ok2 && m.Op() == ir.OMAKESLICE {
+					if made == nil {
+						made = make(map[*ir.MakeExpr]*ir.Name)
+					}
+					made[m] = x.Canonical()
+				}
+			}
+		}
 		switch n.Op() {
 		case ir.OCONVIFACE:
 			x := n.(*ir.ConvExpr).X
@@ -519,5 +548,13 @@ func (w *walkState) analyzePreWalk(fn *ir.Func) {
 	})
 	w.staticValues = sv
 	w.shapeConvSources = scs
+	for m, x := range made {
+		if appended[x] {
+			if w.appendedMakes == nil {
+				w.appendedMakes = make(map[*ir.MakeExpr]bool)
+			}
+			w.appendedMakes[m] = true
+		}
+	}
 	fn.NumPreWalkNodes = numNodes
 }

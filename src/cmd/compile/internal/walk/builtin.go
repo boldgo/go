@@ -546,11 +546,40 @@ func (w *walkState) walkMakeSlice(n *ir.MakeExpr, init *ir.Nodes) ir.Node {
 		argtype = types.Types[types.TINT]
 	}
 	fn := typecheck.LookupRuntime(fnname)
+	scoped := n.Esc() == ir.EscNone && freegcScopeEnabled(w.curfunc) && !t.Elem().HasPointers() && !w.appendedMakes[n]
+	var hp, hs *ir.Name
+	if scoped {
+		// The object cannot outlive the loop iteration (or call) that
+		// allocated it, so the object from this make's previous run is
+		// dead: free it, and let this allocation reuse it.
+		//
+		//	if hp != nil { freegc(hp, hs, true) }
+		//	ptr = makeslice(...)
+		//	hp, hs = ptr, uintptr(cap)*sizeof(E)
+		//
+		// ssagen frees the last one on return.
+		hp = typecheck.TempAt(base.Pos, w.curfunc, types.Types[types.TUNSAFEPTR])
+		hs = typecheck.TempAt(base.Pos, w.curfunc, types.Types[types.TUINTPTR])
+		w.curfunc.FreegcScope = append(w.curfunc.FreegcScope, hp, hs)
+		nif := ir.NewIfStmt(base.Pos, ir.NewBinaryExpr(base.Pos, ir.ONE, hp, typecheck.NodNil()), nil, nil)
+		nif.Body.Append(w.mkcall("freegc", nil, &nif.Body, hp, hs, ir.NewBool(base.Pos, true)))
+		w.appendWalkStmt(init, typecheck.Stmt(w.curfunc, nif))
+		if base.Debug.FreegcScope >= 2 {
+			base.WarnfAt(n.Pos(), "freegc: make frees its previous object and on return")
+		}
+	}
 	ptr := w.mkcall1(fn, types.Types[types.TUNSAFEPTR], init, reflectdata.MakeSliceElemRType(w.curfunc, base.Pos, n), typecheck.Conv(w.curfunc, len, argtype), typecheck.Conv(w.curfunc, cap, argtype))
 	ptr.MarkNonNil()
 	len = typecheck.Conv(w.curfunc, len, types.Types[types.TINT])
 	cap = typecheck.Conv(w.curfunc, cap, types.Types[types.TINT])
-	s := ir.NewSliceHeaderExpr(base.Pos, t, ptr, len, cap)
+	var p ir.Node = ptr
+	if scoped {
+		w.appendWalkStmt(init, ir.NewAssignStmt(base.Pos, hp, ptr))
+		p = hp
+		size := ir.NewBinaryExpr(base.Pos, ir.OMUL, typecheck.Conv(w.curfunc, cap, types.Types[types.TUINTPTR]), ir.NewInt(base.Pos, t.Elem().Size()))
+		w.appendWalkStmt(init, ir.NewAssignStmt(base.Pos, hs, size))
+	}
+	s := ir.NewSliceHeaderExpr(base.Pos, t, p, len, cap)
 	w.appendWalkStmt(init, ir.NewAssignStmt(base.Pos, slice, s))
 
 	return slice
@@ -991,4 +1020,14 @@ func isByteCount(n ir.Node) bool {
 // is a correctness rewrite, not an optimization.
 func isChanLenCap(n ir.Node) bool {
 	return (n.Op() == ir.OLEN || n.Op() == ir.OCAP) && n.(*ir.UnaryExpr).X.Type().IsChan()
+}
+
+// freegcScopeEnabled reports whether walk may free the heap objects of
+// fn's non-escaping makes when their scope ends (see walkMakeSlice).
+// Nosplit and norace functions may run where calling the runtime is not
+// allowed, such as between the halves of a fork.
+func freegcScopeEnabled(fn *ir.Func) bool {
+	return buildcfg.Experiment.RuntimeFreegc && base.Debug.FreegcScope != 0 &&
+		base.Flag.N == 0 && !base.Flag.Cfg.Instrumenting && !base.Flag.CompilingRuntime &&
+		fn.Pragma&(ir.Nosplit|ir.Norace) == 0
 }

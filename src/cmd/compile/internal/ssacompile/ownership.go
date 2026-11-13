@@ -154,6 +154,9 @@ func (o *ownState) check(g *ssa.Value) string {
 			if after[u.ID] && !after[a.ID] {
 				return "old backing store used after the call: " + u.Op.String()
 			}
+			if isStaticCall(u) && u.Aux.(*ssa.AuxCall).Fn.Name == "runtime.freegc" {
+				return "freed when its scope ends"
+			}
 			if u == g || derivesPointer(u.Op) || o.borrows(u, a) {
 				continue
 			}

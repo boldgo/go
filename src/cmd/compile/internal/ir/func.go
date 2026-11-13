@@ -85,6 +85,12 @@ type Func struct {
 	// Populated during walk.
 	Closures []*Func
 
+	// FreegcScope lists pairs of temporaries (pointer, size) that each
+	// hold the latest heap object allocated by a non-escaping make. The
+	// object is freed before that make runs again and when the function
+	// returns. Populated during walk under GOEXPERIMENT=runtimefreegc.
+	FreegcScope []*Name
+
 	// Parent of a closure
 	ClosureParent *Func
 
