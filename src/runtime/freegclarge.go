@@ -60,6 +60,7 @@ func freegcLarge(ptr unsafe.Pointer) {
 		}
 		c.reusableLarge[c.reusableLargeN] = s
 		c.reusableLargeN++
+		c.creditHeapLive(-int64(s.elemsize))
 	}
 	c.explicitFrees++
 	c.explicitFreeBytes += s.elemsize
@@ -89,6 +90,7 @@ func mallocgcLargeReuse(mp *m, c *mcache, s *mspan, size uintptr, needzero bool)
 	s.limit = s.base() + size
 	c.explicitReuses++
 	c.explicitReuseBytes += s.elemsize
+	c.creditHeapLive(int64(s.elemsize))
 
 	// mallocgc charges the full span against the assist budget, but this
 	// memory is already accounted for in heapLive, as on the small-object

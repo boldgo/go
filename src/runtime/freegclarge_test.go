@@ -80,3 +80,41 @@ func TestFreegcLargeDifferentSize(t *testing.T) {
 	}
 	largeSink = nil
 }
+
+func TestFreegcCreditsHeapLive(t *testing.T) {
+	skipUnlessFreegcReuses(t)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+	const n, size = 10000, 64
+	objs := make([][]byte, n)
+	for try := 0; ; try++ {
+		runtime.GC()
+		for i := range objs {
+			objs[i] = make([]byte, size)
+		}
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		gcs := stats.NumGC
+		before := runtime.HeapLive()
+		for i, b := range objs {
+			objs[i] = nil
+			runtime.Freegc(unsafe.Pointer(unsafe.SliceData(b)), size, true)
+		}
+		after := runtime.HeapLive()
+		runtime.ReadMemStats(&stats)
+		if stats.NumGC != gcs {
+			// A GC recomputed heapLive in between.
+			if try < 5 {
+				continue
+			}
+			t.Skip("a GC ran during every attempt")
+		}
+		// Up to freegcCreditFlush of credit may still be pending on the P.
+		if want := uint64(n*size - 64<<10); before < after || before-after < want {
+			t.Errorf("heapLive went from %d to %d after freeing %d bytes, want a drop of at least %d", before, after, n*size, want)
+		}
+		return
+	}
+}

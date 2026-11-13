@@ -69,6 +69,12 @@ type mcache struct {
 	reusableLarge  [reusableLargeSpans]*mspan
 	reusableLargeN int
 
+	// freegcCredit is the heapLive adjustment in bytes, not yet applied,
+	// for objects freed by freegc and reused during sweep cycle
+	// freegcCreditGen. See creditHeapLive.
+	freegcCredit    int64
+	freegcCreditGen uint32
+
 	// Counts of objects freed by freegc and of allocations satisfied by
 	// reusing them, along with their slot sizes in bytes. Flushed to
 	// memstats.heapStats in releaseAll.
@@ -404,6 +410,13 @@ func (c *mcache) releaseAll() {
 	// Clear the reusable linked lists.
 	c.dropReusableLists()
 
+	// A credit from before the last mark termination is already reflected
+	// in the heapLive it recomputed.
+	if c.freegcCreditGen == mheap_.sweepgen {
+		dHeapLive += c.freegcCredit
+	}
+	c.freegcCredit = 0
+
 	// Update heapLive and heapScan.
 	gcController.update(dHeapLive, scanAlloc)
 }
@@ -588,8 +601,30 @@ func (c *mcache) freeReusableLinks() {
 // countExplicitReuse records that an allocation was satisfied by an object
 // that freegc made reusable.
 func (c *mcache) countExplicitReuse(spc spanClass) {
+	size := uintptr(gc.SizeClassToSize[spc.sizeclass()])
 	c.explicitReuses++
-	c.explicitReuseBytes += uintptr(gc.SizeClassToSize[spc.sizeclass()])
+	c.explicitReuseBytes += size
+	c.creditHeapLive(int64(size))
+}
+
+// freegcCreditFlush bounds a P's pending heapLive adjustment from freegc.
+const freegcCreditFlush = 64 << 10
+
+// creditHeapLive records that n bytes were freed by freegc (n < 0) or that
+// freed bytes were reused (n > 0). Like memory freed from an arena, freed
+// memory stops counting toward the next GC trigger. Adjustments are applied
+// in batches. One recorded before the last mark termination is dropped,
+// since that recomputed heapLive from the marked heap.
+func (c *mcache) creditHeapLive(n int64) {
+	if sg := mheap_.sweepgen; c.freegcCreditGen != sg {
+		c.freegcCredit = 0
+		c.freegcCreditGen = sg
+	}
+	c.freegcCredit += n
+	if c.freegcCredit <= -freegcCreditFlush || c.freegcCredit >= freegcCreditFlush {
+		gcController.update(c.freegcCredit, 0)
+		c.freegcCredit = 0
+	}
 }
 
 // addReusableNoscan adds a noscan object pointer to the reusable pointer free list

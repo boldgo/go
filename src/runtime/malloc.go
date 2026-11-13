@@ -2118,8 +2118,10 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 		freegcCheckRecord(c, ptr, size)
 	case noscan:
 		c.addReusableNoscan(spc, uintptr(v))
+		c.creditHeapLive(-int64(gc.SizeClassToSize[sizeclass]))
 	default:
 		c.addReusableScan(spc, uintptr(v))
+		c.creditHeapLive(-int64(gc.SizeClassToSize[sizeclass]))
 	}
 
 	// For stats, for now we leave allocCount alone, roughly pretending to the rest

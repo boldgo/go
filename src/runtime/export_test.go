@@ -696,6 +696,10 @@ func FreegcCheckReported() uint64 {
 	return freegcCheckReported
 }
 
+func HeapLive() uint64 {
+	return gcController.heapLive.Load()
+}
+
 // Expose gcAssistBytes for the current g for testing.
 func AssistCredit() int64 {
 	assistG := getg()
