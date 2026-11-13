@@ -1999,6 +1999,11 @@ const (
 // (Internally, the runtime deals appropriately with internally-created
 // specials, such as specials for memory profiling).
 //
+// If ptr is not the start of a heap object whose size class matches size
+// and noscan, freegc frees nothing (under GODEBUG=freegccheck it throws),
+// so a caller that knows only that the object is dead cannot corrupt the
+// heap with a wrong size.
+//
 // If the size of ptr's object is less than 16 bytes or greater than
 // 32KiB - gc.MallocHeaderSize bytes, freegc is currently a no-op. It must only
 // be called in alloc-safe places. It currently throws if noscan is false
@@ -2051,6 +2056,20 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 		throw("freegc during signal")
 	}
 	mp.mallocing = 1
+
+	// A size or noscan flag that does not match the object would put it
+	// on another span class's list, and an interior pointer would hand
+	// out part of an object. The compiler proves only that the object is
+	// dead, so check before touching it, and free nothing unless ptr is
+	// exactly an object of the class that size and noscan give.
+	if !freegcMatches(ptr, size, noscan) {
+		if debug.freegccheck != 0 {
+			throw("freegc: size does not match the object")
+		}
+		mp.mallocing = 0
+		releasem(mp)
+		return
+	}
 	if debug.freegccheck == 0 && !freegcSpecials(uintptr(ptr), size) {
 		mp.mallocing = 0
 		releasem(mp)
@@ -2140,6 +2159,25 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 
 	mp.mallocing = 0
 	releasem(mp)
+}
+
+// freegcMatches reports whether ptr is the start of a heap object of the
+// span class that freegc computes from size and noscan.
+func freegcMatches(ptr unsafe.Pointer, size uintptr, noscan bool) bool {
+	v := uintptr(ptr)
+	if !noscan && !heapBitsInSpan(size) {
+		v -= mallocHeaderSize
+		size += mallocHeaderSize
+	}
+	var sizeclass uint8
+	if size <= gc.SmallSizeMax-8 {
+		sizeclass = gc.SizeToSizeClass8[divRoundUp(size, gc.SmallSizeDiv)]
+	} else {
+		sizeclass = gc.SizeToSizeClass128[divRoundUp(size-gc.SmallSizeMax, gc.LargeSizeDiv)]
+	}
+	span := spanOfHeap(v)
+	return span != nil && span.spanclass == makeSpanClass(sizeclass, noscan) &&
+		span.base()+span.objIndex(v)*span.elemsize == v
 }
 
 // freegcSlice records that the backing array for a slice is reusable and
