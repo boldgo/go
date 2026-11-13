@@ -41,6 +41,7 @@ type DebugFlags struct {
 	FIPSHash              string `help:"hash value for FIPS debugging" concurrent:"ok"`
 	Fmahash               string `help:"hash value for use in debugging platform-dependent multiply-add use" concurrent:"ok"`
 	FreeAppend            int    `help:"insert frees of append results when proven safe (0 disabled, 1 enabled, 2 enabled + log)" concurrent:"ok"`
+	FreegcSSA             int    `help:"free old append backing stores proven dead in SSA (0 disabled, 1 enabled, 2 enabled + log, 3 also log rejections)" concurrent:"ok"`
 	GCAdjust              int    `help:"log adjustments to GOGC" concurrent:"ok"`
 	GCCheck               int    `help:"check heap/gc use by compiler" concurrent:"ok"`
 	GCProg                int    `help:"print dump of GC programs"`

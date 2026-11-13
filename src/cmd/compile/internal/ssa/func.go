@@ -76,6 +76,15 @@ type Func struct {
 	RegArgs []Spill
 	// OwnAux describes parameters and results for this function.
 	OwnAux *AuxCall
+	// FreegcGrows lists growslice calls with pointer-free element types
+	// that the ownership pass may turn into calls that free the old
+	// backing store. Set under GOEXPERIMENT=runtimefreegc.
+	FreegcGrows []*Value
+	// NoEscapeParams maps a static call to a bit set of the callee's
+	// parameters (receiver first) whose pointer value escape analysis
+	// found the callee does not retain. Set under GOEXPERIMENT=runtimefreegc
+	// for the ownership pass.
+	NoEscapeParams map[*Value]uint64
 	// CloSlot holds the compiler-synthesized name (".closureptr")
 	// where we spill the closure pointer for range func bodies.
 	CloSlot *ir.Name

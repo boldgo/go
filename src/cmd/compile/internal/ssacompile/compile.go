@@ -437,6 +437,7 @@ var passes = [...]ssa.Pass{
 	{Name: "decompose addr", Fn: decomposeAddr},
 	{Name: "mem2reg", Fn: mem2reg},
 	{Name: "ptr stats", Fn: ptrStats},
+	{Name: "ownership", Fn: ownership, Disabled: !buildcfg.Experiment.RuntimeFreegc},
 	{Name: "softfloat", Fn: softfloat, Required: true},
 	{Name: "branchelim", Fn: branchelim},
 	{Name: "late opt", Fn: opt, Required: true},

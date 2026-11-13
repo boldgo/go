@@ -129,6 +129,22 @@ func ParseLeaks(s string) leaks {
 	return parseLeaks(s)
 }
 
+// Retains reports whether the pointer value itself, rather than only
+// values loaded through it, may outlive the call: whether it flows to the
+// heap or to a result. Writing through the pointer or calling it does not
+// retain it.
+func (l leaks) Retains() bool {
+	if l.Heap() == 0 {
+		return true
+	}
+	for i := range numEscResults {
+		if l.Result(i) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Any reports whether the value flows anywhere at all.
 func (l leaks) Any() bool {
 	// TODO: do mutator/callee matter?

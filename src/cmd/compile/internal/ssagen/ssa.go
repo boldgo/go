@@ -20,6 +20,7 @@ import (
 
 	"cmd/compile/internal/abi"
 	"cmd/compile/internal/base"
+	"cmd/compile/internal/escape"
 	"cmd/compile/internal/ir"
 	"cmd/compile/internal/liveness"
 	"cmd/compile/internal/objw"
@@ -4109,6 +4110,11 @@ func (s *state) append(n *ir.CallExpr, inplace bool) *ssa.Value {
 		}
 		r = s.rtcall(fn, true, []*types.Type{n.Type()}, p, l, c, nargs, taddr)
 	}
+	if buildcfg.Experiment.RuntimeFreegc && !n.AppendNoAlias && !et.HasPointers() {
+		// The SSA ownership pass may still prove the old backing store dead.
+		// rtcall leaves the call's memory result as the current memory.
+		s.f.FreegcGrows = append(s.f.FreegcGrows, s.mem().Args[0])
+	}
 
 	// Decompose output slice
 	p = s.newValue1(ssaop.OpSlicePtr, pt, r[0])
@@ -5213,6 +5219,9 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		}
 		call.AddArgs(callArgs...)
 		call.AuxInt = stksize // Call operations carry the argsize of the callee along with them
+		if buildcfg.Experiment.RuntimeFreegc && call.Op == ssaop.OpStaticLECall && calleeLSym != nil {
+			s.recordNoEscapeParams(call, n.Fun.Type())
+		}
 	}
 	s.prevCall = call
 	s.vars[memVar] = s.newValue1I(ssaop.OpSelectN, types.TypeMem, int64(len(ACResults)), call)
@@ -8226,3 +8235,25 @@ func isStructNotSIMD(t *types.Type) bool {
 }
 
 var BoundsCheckFunc [ssa.BoundsKindCount]*obj.LSym
+
+// recordNoEscapeParams records which parameters of a static call's callee
+// do not retain their pointer value, according to their escape tags, for
+// the SSA ownership pass.
+func (s *state) recordNoEscapeParams(call *ssa.Value, ft *types.Type) {
+	var mask uint64
+	for i, p := range ft.RecvParams() {
+		if i >= 64 {
+			break
+		}
+		if p.Type.HasPointers() && !escape.ParseLeaks(p.Note).Retains() {
+			mask |= 1 << i
+		}
+	}
+	if mask == 0 {
+		return
+	}
+	if s.f.NoEscapeParams == nil {
+		s.f.NoEscapeParams = make(map[*ssa.Value]uint64)
+	}
+	s.f.NoEscapeParams[call] = mask
+}

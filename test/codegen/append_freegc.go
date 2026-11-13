@@ -1,10 +1,13 @@
-// asmcheck
+// asmcheck -gcflags=-d=freegcssa=0
 
 //go:build goexperiment.runtimefreegc
 
 // Copyright 2025 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+// The SSA ownership pass is off so that this file tests the alias
+// analysis in escape/alias.go alone; append_freegc_ssa.go tests the pass.
 
 package codegen
 

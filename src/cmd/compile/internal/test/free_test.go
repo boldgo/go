@@ -43,13 +43,43 @@ func TestFreeAppendAllocations(t *testing.T) {
 			var alias []int64
 			for i := range 100 {
 				s = append(s, int64(i))
+				if len(alias) > 0 {
+					// Reads the old backing store after the append.
+					freeTestSink += alias[0]
+				}
 				alias = s
 			}
-			_ = alias
 		})
 		t.Logf("allocs: %v", allocs)
 		if allocs < 2 {
 			t.Errorf("allocs: %v, want >= 2", allocs)
 		}
 	})
+
+	t.Run("slice-dead-alias", func(t *testing.T) {
+		if !goexperiment.RuntimeFreegc {
+			t.Skip("skipping allocation test when runtime.freegc is disabled")
+		}
+		if race.Enabled || msan.Enabled || asan.Enabled {
+			t.Skip("skipping allocation test under race detector and other sanitizers")
+		}
+
+		// alias is overwritten before it is read again, so the old backing
+		// store is dead at each append. The SSA ownership pass proves it.
+		allocs := testing.AllocsPerRun(100, func() {
+			var s []int64
+			var alias []int64
+			for i := range 100 {
+				s = append(s, int64(i))
+				alias = s
+			}
+			_ = alias
+		})
+		t.Logf("allocs: %v", allocs)
+		if allocs != 1 {
+			t.Errorf("allocs: %v, want 1", allocs)
+		}
+	})
 }
+
+var freeTestSink int64
