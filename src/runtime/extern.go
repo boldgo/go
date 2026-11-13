@@ -95,6 +95,14 @@ It is a comma-separated list of name=val pairs setting these named variables:
 	where each object is allocated on a unique page and addresses are
 	never recycled.
 
+	freegccheck: with GOEXPERIMENT=runtimefreegc, setting freegccheck=1 makes the
+	runtime keep, rather than reuse, memory that compiler-inserted code frees early,
+	and makes the next garbage collection verify that each such object is unreachable.
+	If one is still reachable, the program throws and prints where it was freed.
+	Setting freegccheck=2 prints each such object and continues. Lines produced by
+	this mode start with "runtime: freegccheck:". Because freed memory is never
+	reused in this mode, programs behave as if nothing were freed early.
+
 	gccheckmark: setting gccheckmark=1 enables verification of the
 	garbage collector's concurrent mark phase by performing a
 	second mark pass while the world is stopped.  If the second

@@ -273,6 +273,34 @@ func initMetrics() {
 				out.scalar = in.heapStats.totalAllocs
 			},
 		},
+		"/gc/heap/explicit-frees:bytes": {
+			deps: makeStatDepSet(heapStatsDep),
+			compute: func(in *statAggregate, out *metricValue) {
+				out.kind = metricKindUint64
+				out.scalar = in.heapStats.explicitFree
+			},
+		},
+		"/gc/heap/explicit-frees:objects": {
+			deps: makeStatDepSet(heapStatsDep),
+			compute: func(in *statAggregate, out *metricValue) {
+				out.kind = metricKindUint64
+				out.scalar = in.heapStats.explicitFreeCount
+			},
+		},
+		"/gc/heap/explicit-reuses:bytes": {
+			deps: makeStatDepSet(heapStatsDep),
+			compute: func(in *statAggregate, out *metricValue) {
+				out.kind = metricKindUint64
+				out.scalar = in.heapStats.explicitReuse
+			},
+		},
+		"/gc/heap/explicit-reuses:objects": {
+			deps: makeStatDepSet(heapStatsDep),
+			compute: func(in *statAggregate, out *metricValue) {
+				out.kind = metricKindUint64
+				out.scalar = in.heapStats.explicitReuseCount
+			},
+		},
 		"/gc/heap/frees-by-size:bytes": {
 			deps: makeStatDepSet(heapStatsDep),
 			compute: func(in *statAggregate, out *metricValue) {

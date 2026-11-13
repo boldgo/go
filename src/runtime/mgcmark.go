@@ -1623,6 +1623,9 @@ func scanConservative(b, n uintptr, ptrmask *uint8, gcw *gcWork, state *stackSca
 
 		// val points to an allocated object. Mark it.
 		obj := span.base() + idx*span.elemsize
+		if debug.freegccheck != 0 {
+			freegcCheckConservative(obj, span.elemsize)
+		}
 		if !tryDeferToSpanScan(obj, gcw) {
 			greyobject(obj, b, i, span, gcw, idx)
 		}

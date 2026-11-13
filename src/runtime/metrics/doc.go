@@ -198,6 +198,31 @@ Below is the full list of supported metrics, ordered lexicographically.
 		application. Note that this does not include tiny objects as
 		defined by /gc/heap/tiny/allocs:objects, only tiny blocks.
 
+	/gc/heap/explicit-frees:bytes
+		Cumulative sum of heap memory freed by code the compiler
+		inserted, before the garbage collector found it unreachable.
+		Nonzero only with GOEXPERIMENT=runtimefreegc. Memory freed this
+		way that is not reused before the next garbage collection is
+		also counted later in /gc/heap/frees:bytes. Updated at least
+		once per GC cycle.
+
+	/gc/heap/explicit-frees:objects
+		Cumulative count of heap objects freed by code the compiler
+		inserted. See /gc/heap/explicit-frees:bytes.
+
+	/gc/heap/explicit-reuses:bytes
+		Cumulative sum of heap allocations satisfied by reusing memory
+		counted in /gc/heap/explicit-frees:bytes. These allocations
+		are not included in /gc/heap/allocs:bytes, so explicit-reuses
+		/ (allocs + explicit-reuses) is the share of allocation that
+		did not add work for the garbage collector. Nonzero only with
+		GOEXPERIMENT=runtimefreegc. Updated at least once per GC cycle.
+
+	/gc/heap/explicit-reuses:objects
+		Cumulative count of heap allocations satisfied by
+		reusing memory freed by code the compiler inserted. See
+		/gc/heap/explicit-reuses:bytes.
+
 	/gc/heap/frees-by-size:bytes
 		Distribution of freed heap allocations by approximate size.
 		Bucket counts increase monotonically. Note that this does not

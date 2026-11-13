@@ -263,6 +263,43 @@ var allDesc = []Description{
 		Cumulative: true,
 	},
 	{
+		Name: "/gc/heap/explicit-frees:bytes",
+		Description: "Cumulative sum of heap memory freed by code the compiler inserted, " +
+			"before the garbage collector found it unreachable. " +
+			"Nonzero only with GOEXPERIMENT=runtimefreegc. " +
+			"Memory freed this way that is not reused before the next garbage collection " +
+			"is also counted later in /gc/heap/frees:bytes. " +
+			"Updated at least once per GC cycle.",
+		Kind:       KindUint64,
+		Cumulative: true,
+	},
+	{
+		Name: "/gc/heap/explicit-frees:objects",
+		Description: "Cumulative count of heap objects freed by code the compiler inserted. " +
+			"See /gc/heap/explicit-frees:bytes.",
+		Kind:       KindUint64,
+		Cumulative: true,
+	},
+	{
+		Name: "/gc/heap/explicit-reuses:bytes",
+		Description: "Cumulative sum of heap allocations satisfied by reusing memory " +
+			"counted in /gc/heap/explicit-frees:bytes. " +
+			"These allocations are not included in /gc/heap/allocs:bytes, so " +
+			"explicit-reuses / (allocs + explicit-reuses) is the share of allocation " +
+			"that did not add work for the garbage collector. " +
+			"Nonzero only with GOEXPERIMENT=runtimefreegc. " +
+			"Updated at least once per GC cycle.",
+		Kind:       KindUint64,
+		Cumulative: true,
+	},
+	{
+		Name: "/gc/heap/explicit-reuses:objects",
+		Description: "Cumulative count of heap allocations satisfied by reusing memory " +
+			"freed by code the compiler inserted. See /gc/heap/explicit-reuses:bytes.",
+		Kind:       KindUint64,
+		Cumulative: true,
+	},
+	{
 		Name: "/gc/heap/frees-by-size:bytes",
 		Description: "Distribution of freed heap allocations by approximate size. " +
 			"Bucket counts increase monotonically. " +

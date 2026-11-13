@@ -1410,6 +1410,7 @@ func mallocgcSmallNoscanReuse(c *mcache, span *mspan, spc spanClass, size uintpt
 	// Maybe doesn't matter. gclinkptr might be for historical reasons.
 	v, span := c.nextReusableNoScan(span, spc)
 	x := unsafe.Pointer(v)
+	c.countExplicitReuse(spc)
 
 	// Compensate for the GC assist credit deducted in mallocgc (before calling us and
 	// after we return) because this is not a newly allocated object. We use the full slot
@@ -1580,6 +1581,7 @@ func mallocgcSmallScanNoHeaderReuse(c *mcache, span *mspan, spc spanClass, size 
 	if v != 0 {
 		// We have a reusable object, use it.
 		x := unsafe.Pointer(v)
+		c.countExplicitReuse(spc)
 
 		// This is a previously used object, so always clear (regardless of span.needzero).
 		memclrNoHeapPointers(x, size)
@@ -1731,6 +1733,7 @@ func mallocgcSmallScanHeader(size uintptr, typ *_type) (unsafe.Pointer, uintptr)
 func mallocgcSmallScanHeaderReuse(c *mcache, span *mspan, spc spanClass, size uintptr, typ *_type) unsafe.Pointer {
 	v, span := c.nextReusableScanHeader(span, spc)
 	x := unsafe.Pointer(v)
+	c.countExplicitReuse(spc)
 
 	// Compensate for the GC assist credit deducted in mallocgc (before calling us and after we return)
 	// because this is not a newly allocated object. We use the full slot size (elemsize) here because
@@ -2098,14 +2101,20 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) {
 		}
 	}
 
-	if noscan {
+	switch {
+	case debug.freegccheck != 0:
+		freegcCheckRecord(c, ptr, size)
+	case noscan:
 		c.addReusableNoscan(spc, uintptr(v))
-	} else {
+	default:
 		c.addReusableScan(spc, uintptr(v))
 	}
 
 	// For stats, for now we leave allocCount alone, roughly pretending to the rest
-	// of the system that this potential reuse never happened.
+	// of the system that this potential reuse never happened. The explicit
+	// counters below are reported separately by runtime/metrics.
+	c.explicitFrees++
+	c.explicitFreeBytes += uintptr(gc.SizeClassToSize[sizeclass])
 
 	mp.mallocing = 0
 	releasem(mp)

@@ -64,6 +64,17 @@ type mcache struct {
 	// This helps reduce use of fixalloc..
 	reusableLinkCache *reusableLink
 
+	// Counts of objects freed by freegc and of allocations satisfied by
+	// reusing them, along with their slot sizes in bytes. Flushed to
+	// memstats.heapStats in releaseAll.
+	explicitFrees      uintptr
+	explicitFreeBytes  uintptr
+	explicitReuses     uintptr
+	explicitReuseBytes uintptr
+
+	// freegcCheck records frees for GODEBUG=freegccheck. See freegccheck.go.
+	freegcCheck *freegcCheckBuf
+
 	stackcache [_NumStackOrders]stackfreelist
 
 	// flushGen indicates the sweepgen during which this mcache
@@ -371,10 +382,18 @@ func (c *mcache) releaseAll() {
 	c.tiny = 0
 	c.tinyoffset = 0
 
-	// Flush tinyAllocs.
+	// Flush tinyAllocs and the explicit free and reuse counts (see countExplicitReuse).
 	stats := memstats.heapStats.acquire()
 	atomic.Xadd64(&stats.tinyAllocCount, int64(c.tinyAllocs))
 	c.tinyAllocs = 0
+	if c.explicitFrees != 0 || c.explicitReuses != 0 {
+		atomic.Xadd64(&stats.explicitFreeCount, int64(c.explicitFrees))
+		atomic.Xadd64(&stats.explicitFree, int64(c.explicitFreeBytes))
+		atomic.Xadd64(&stats.explicitReuseCount, int64(c.explicitReuses))
+		atomic.Xadd64(&stats.explicitReuse, int64(c.explicitReuseBytes))
+		c.explicitFrees, c.explicitFreeBytes = 0, 0
+		c.explicitReuses, c.explicitReuseBytes = 0, 0
+	}
 	memstats.heapStats.release()
 
 	// Clear the reusable linked lists.
@@ -559,6 +578,13 @@ func (c *mcache) freeReusableLinks() {
 		}
 		unlock(&mheap_.reusableLinkLock)
 	}
+}
+
+// countExplicitReuse records that an allocation was satisfied by an object
+// that freegc made reusable.
+func (c *mcache) countExplicitReuse(spc spanClass) {
+	c.explicitReuses++
+	c.explicitReuseBytes += uintptr(gc.SizeClassToSize[spc.sizeclass()])
 }
 
 // addReusableNoscan adds a noscan object pointer to the reusable pointer free list

@@ -679,6 +679,23 @@ func Freegc(p unsafe.Pointer, size uintptr, noscan bool) {
 	freegc(p, size, noscan)
 }
 
+// SetFreegcCheck sets GODEBUG=freegccheck and returns the previous value.
+func SetFreegcCheck(v int32) (old int32) {
+	old = debug.freegccheck
+	debug.freegccheck = v
+	return old
+}
+
+// FreegcCheck returns the GODEBUG=freegccheck setting.
+func FreegcCheck() int32 {
+	return debug.freegccheck
+}
+
+// FreegcCheckReported returns how many objects freegccheck=2 has reported.
+func FreegcCheckReported() uint64 {
+	return freegcCheckReported
+}
+
 // Expose gcAssistBytes for the current g for testing.
 func AssistCredit() int64 {
 	assistG := getg()

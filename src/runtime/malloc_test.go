@@ -238,6 +238,9 @@ func TestTinyAllocIssue37262(t *testing.T) {
 
 // TestFreegc does basic testing of explicit frees.
 func TestFreegc(t *testing.T) {
+	if runtime.FreegcCheck() != 0 {
+		t.Skip("GODEBUG=freegccheck disables reuse, and these tests free reachable objects")
+	}
 	tests := []struct {
 		size   string
 		f      func(noscan bool) func(*testing.T)

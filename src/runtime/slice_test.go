@@ -601,6 +601,9 @@ func TestAppendByteInLoop(t *testing.T) {
 	if asan.Enabled || msan.Enabled {
 		t.Skip("skipping in sanitizer mode")
 	}
+	if runtime.FreegcCheck() != 0 {
+		t.Skip("freegccheck keeps freed objects from being reused")
+	}
 	for _, test := range [][3]int{
 		{0, 0, 0},
 		{1, 1, 8},
@@ -730,6 +733,9 @@ func TestAppendByteCapInLoop(t *testing.T) {
 	}
 	if asan.Enabled || msan.Enabled {
 		t.Skip("skipping in sanitizer mode")
+	}
+	if runtime.FreegcCheck() != 0 {
+		t.Skip("freegccheck keeps freed objects from being reused")
 	}
 	for _, test := range [][3]int{
 		{0, 0, 0},

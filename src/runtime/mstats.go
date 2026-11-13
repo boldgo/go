@@ -687,6 +687,14 @@ type heapStatsDelta struct {
 	largeFreeCount  uint64                    // number of frees for large objects (>maxSmallSize)
 	smallFreeCount  [gc.NumSizeClasses]uint64 // number of frees for small objects (<=maxSmallSize)
 
+	// Explicit frees by freegc (GOEXPERIMENT=runtimefreegc) and allocations
+	// satisfied by reusing them. These are separate from the counts above,
+	// which do not see an object that is freed early and then reused.
+	explicitFree       uint64 // bytes freed by freegc
+	explicitFreeCount  uint64 // number of objects freed by freegc
+	explicitReuse      uint64 // bytes of allocations satisfied by reuse
+	explicitReuseCount uint64 // number of allocations satisfied by reuse
+
 	// NOTE: This struct must be a multiple of 8 bytes in size because it
 	// is stored in an array. If it's not, atomic accesses to the above
 	// fields may be unaligned and fail on 32-bit platforms.
@@ -711,6 +719,10 @@ func (a *heapStatsDelta) merge(b *heapStatsDelta) {
 	for i := range b.smallFreeCount {
 		a.smallFreeCount[i] += b.smallFreeCount[i]
 	}
+	a.explicitFree += b.explicitFree
+	a.explicitFreeCount += b.explicitFreeCount
+	a.explicitReuse += b.explicitReuse
+	a.explicitReuseCount += b.explicitReuseCount
 }
 
 // consistentHeapStats represents a set of various memory statistics

@@ -1398,6 +1398,9 @@ func gcMarkTermination(stw worldStop) {
 		if debug.checkfinalizers > 0 {
 			checkFinalizersAndCleanups()
 		}
+		if debug.freegccheck > 0 {
+			freegcCheckVerify()
+		}
 
 		// marking is complete so we can turn the write barrier off
 		setGCPhase(_GCoff)
