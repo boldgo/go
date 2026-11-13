@@ -749,12 +749,14 @@ func cgoCheckArg(t *_type, p unsafe.Pointer, indir, top bool, msg cgoErrorMsg) {
 // pointer into unpinned Go memory. If it does, we panic.
 // The return values are unused but useful to see in panic tracebacks.
 func cgoCheckUnknownPointer(p unsafe.Pointer, msg cgoErrorMsg) (base, i uintptr) {
-	if inheap(uintptr(p)) {
-		b, span, _ := findObject(uintptr(p), 0, 0)
-		base = b
-		if base == 0 {
+	if span := spanOfHeap(uintptr(p)); span != nil {
+		// Objects without pointers cannot hold Go pointers, and a pointer
+		// past the last object (into the span's tail, where small spans keep
+		// their heap bitmap) points at no object.
+		if span.spanclass.noscan() || uintptr(p) >= span.limit {
 			return
 		}
+		base = span.base() + span.objIndex(uintptr(p))*span.elemsize
 		tp := span.typePointersOfUnchecked(base)
 		for {
 			var addr uintptr
