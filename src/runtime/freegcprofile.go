@@ -6,21 +6,17 @@ package runtime
 
 import "unsafe"
 
-// freegcSpecials prepares the object at p, of the given size, to be reused
-// after freegc. If the heap profiler sampled the object, it records the
-// free and removes the profile record, as sweeping would, so that a reuse
-// of the slot can be sampled as a new allocation. It reports false, and
-// changes nothing, if p is not a heap object or has any other special
-// record, such as a finalizer, cleanup, or weak pointer; registering one
-// requires handing the pointer to the runtime, so the compiler never frees
-// such an object, but freegc keeps it rather than trust that.
+// freegcSpecials prepares the object at p in span s, of the given size,
+// to be reused after freegc. If the heap profiler sampled the object, it
+// records the free and removes the profile record, as sweeping would, so
+// that a reuse of the slot can be sampled as a new allocation. It reports
+// false, and changes nothing, if p has any other special record, such as
+// a finalizer, cleanup, or weak pointer; registering one requires handing
+// the pointer to the runtime, so the compiler never frees such an object,
+// but freegc keeps it rather than trust that.
 //
 // It must be called with mp.mallocing set.
-func freegcSpecials(p, size uintptr) bool {
-	s := spanOfHeap(p)
-	if s == nil {
-		return false
-	}
+func freegcSpecials(s *mspan, p, size uintptr) bool {
 	if s.specials == nil {
 		return true
 	}

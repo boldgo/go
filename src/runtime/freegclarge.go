@@ -43,7 +43,7 @@ func freegcLarge(ptr unsafe.Pointer) {
 		return
 	}
 	mp.mallocing = 1
-	if debug.freegccheck == 0 && !freegcSpecials(uintptr(ptr), s.elemsize) {
+	if debug.freegccheck == 0 && !freegcSpecials(s, uintptr(ptr), s.elemsize) {
 		mp.mallocing = 0
 		releasem(mp)
 		return
