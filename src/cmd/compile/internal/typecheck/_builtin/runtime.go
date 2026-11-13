@@ -73,6 +73,8 @@ func concatstring3(*[64]byte, string, string, string) string
 func concatstring4(*[64]byte, string, string, string, string) string
 func concatstring5(*[64]byte, string, string, string, string, string) string
 func concatstrings(*[64]byte, []string) string
+func concatstring2NoAlias(*[64]byte, string, string) string
+func concatstring3NoAlias(*[64]byte, string, string, string) string
 
 func concatbyte2(*[64]byte, string, string) []byte
 func concatbyte3(*[64]byte, string, string, string) []byte

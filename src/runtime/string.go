@@ -85,6 +85,78 @@ func concatstring5(buf *tmpBuf, a0, a1, a2, a3, a4 string) string {
 	return concatstrings(buf, []string{a0, a1, a2, a3, a4})
 }
 
+// concatstring2NoAlias and concatstring3NoAlias are concatstring2 and
+// concatstring3 for a first operand the caller owns: the compiler has
+// proven that a0 is empty, on the stack, or exactly a heap object that
+// nothing can reach after the call. See concatstringsNoAlias.
+func concatstring2NoAlias(buf *tmpBuf, a0, a1 string) string {
+	return concatstringsNoAlias(buf, []string{a0, a1})
+}
+
+func concatstring3NoAlias(buf *tmpBuf, a0, a1, a2 string) string {
+	return concatstringsNoAlias(buf, []string{a0, a1, a2})
+}
+
+// concatstringsNoAlias concatenates a, where the caller owns a[0]. If
+// a[0]'s heap object has room for the result, the other operands are
+// copied in place after a[0]'s bytes, which no other string covers.
+// Otherwise the result is a new copy and a[0]'s object is freed. Unlike
+// concatstrings, it returns no operand other than a[0], so the caller
+// owns the result in turn.
+func concatstringsNoAlias(buf *tmpBuf, a []string) string {
+	l := 0
+	for _, x := range a {
+		n := len(x)
+		if l+n < l {
+			throw("string concatenation too long")
+		}
+		l += n
+	}
+	if l == 0 {
+		return ""
+	}
+	a0 := a[0]
+	p := unsafe.Pointer(unsafe.StringData(a0))
+	var size uintptr
+	// Strings shorter than maxTinySize may share a tiny block.
+	if runtimeFreegcEnabled && len(a0) >= maxTinySize {
+		size = heapObjectSize(p)
+	}
+	if size >= uintptr(l) {
+		b := unsafe.Slice((*byte)(p), l)
+		n := len(a0)
+		for _, x := range a[1:] {
+			n += copy(b[n:], x)
+		}
+		return unsafe.String((*byte)(p), l)
+	}
+	if l == len(a0) && (buf != nil || !stringDataOnStack(a0)) {
+		return a0
+	}
+	s, b := rawstringtmp(buf, l)
+	for _, x := range a {
+		n := copy(b, x)
+		b = b[n:]
+	}
+	if size != 0 {
+		freegc(p, size, true)
+	}
+	return s
+}
+
+// heapObjectSize returns the size of the pointer-free heap object that
+// starts at p, or 0 if p is not the start of one.
+func heapObjectSize(p unsafe.Pointer) uintptr {
+	s := spanOfHeap(uintptr(p))
+	if s == nil || !s.spanclass.noscan() || s.isUserArenaChunk {
+		return 0
+	}
+	if s.base()+s.objIndex(uintptr(p))*s.elemsize != uintptr(p) {
+		return 0
+	}
+	return s.elemsize
+}
+
 // concatbytes implements a Go string concatenation x+y+z+... returning a slice
 // of bytes.
 // The operands are passed in the slice a.

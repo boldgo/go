@@ -20,6 +20,10 @@ type symsStruct struct {
 	CgoCheckMemmove           *obj.LSym
 	CgoCheckPtrWrite          *obj.LSym
 	CheckPtrAlignment         *obj.LSym
+	Concatstring2             *obj.LSym
+	Concatstring2NoAlias      *obj.LSym
+	Concatstring3             *obj.LSym
+	Concatstring3NoAlias      *obj.LSym
 	Deferproc                 *obj.LSym
 	Deferprocat               *obj.LSym
 	DeferprocStack            *obj.LSym

@@ -40,48 +40,92 @@ import (
 // Together these mean old is the only reference to its array when G runs.
 // Only element types without pointers are candidates; ssagen records them
 // in Func.FreegcGrows.
+//
+// The same rules turn s = concatstring2(buf, s, x) (and concatstring3)
+// into concatstring2NoAlias, which extends s in place when its object has
+// room and otherwise frees it after copying. For strings the accepted
+// heap origins are only results of the call itself, of other NoAlias
+// concatenations, and of string conversions, since a plain concatenation
+// may return one of its operands. The empty string, literals and the
+// stack are accepted too, as the runtime extends and frees only heap
+// objects.
 func ownership(f *ssa.Func) {
-	if base.Debug.FreegcSSA <= 0 || len(f.FreegcGrows) == 0 {
+	if base.Debug.FreegcSSA <= 0 {
+		return
+	}
+	cands := f.FreegcGrows[:len(f.FreegcGrows):len(f.FreegcGrows)]
+	if !base.Flag.Cfg.Instrumenting && !base.Flag.CompilingRuntime {
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				if isStaticCall(v) {
+					fn := v.Aux.(*ssa.AuxCall).Fn
+					if d, ok := ownedCallOf(fn); ok && d.str && fn != d.noAlias {
+						cands = append(cands, v)
+					}
+				}
+			}
+		}
+	}
+	if len(cands) == 0 {
 		return
 	}
 	o := &ownState{f: f}
-	for _, g := range f.FreegcGrows {
+	for _, g := range cands {
 		if g.Block == nil || !isStaticCall(g) {
 			continue // removed as dead
 		}
 		aux := g.Aux.(*ssa.AuxCall)
-		noAlias, nargs := noAliasGrow(aux.Fn)
-		if noAlias == nil || len(g.Args) != nargs+1 {
+		d, ok := ownedCallOf(aux.Fn)
+		if !ok || aux.Fn == d.noAlias || len(g.Args) != d.nargs+1 {
 			continue
 		}
 		if o.users == nil {
 			o.init()
 		}
-		if why := o.check(g); why != "" {
+		what := "old backing store"
+		if d.str {
+			what = "old string"
+		}
+		if why := o.check(g, d); why != "" {
 			if base.Debug.FreegcSSA >= 3 {
-				f.Warnl(g.Pos, "ssa ownership: keeps old backing store: %s", why)
+				f.Warnl(g.Pos, "ssa ownership: keeps %s: %s", what, why)
 			}
 			continue
 		}
 		na := *aux
-		na.Fn = noAlias
+		na.Fn = d.noAlias
 		g.Aux = &na
 		if base.Debug.FreegcSSA >= 2 {
-			f.Warnl(g.Pos, "ssa ownership: frees old backing store")
+			f.Warnl(g.Pos, "ssa ownership: frees %s", what)
 		}
 	}
 }
 
-// noAliasGrow returns the freeing variant of a growslice function and the
-// number of arguments both take.
-func noAliasGrow(fn *obj.LSym) (*obj.LSym, int) {
+// An ownedCall describes a runtime call that copies an object the caller
+// may own into a new one, together with its variant that frees or reuses
+// the old object when the caller does own it.
+type ownedCall struct {
+	noAlias   *obj.LSym
+	nargs     int   // register arguments, not counting memory
+	ptr, size int   // arguments: the old object's pointer, and its capacity or length
+	resPtr    int64 // results: the new object's pointer,
+	resSize   int64 // and its capacity or length
+	str       bool  // a string concatenation
+}
+
+// ownedCallOf describes fn, which may be either variant.
+func ownedCallOf(fn *obj.LSym) (ownedCall, bool) {
 	switch fn {
-	case ir.Syms.Growslice:
-		return ir.Syms.GrowsliceNoAlias, 5
-	case ir.Syms.GrowsliceBuf:
-		return ir.Syms.GrowsliceBufNoAlias, 7
+	case ir.Syms.Growslice, ir.Syms.GrowsliceNoAlias:
+		return ownedCall{noAlias: ir.Syms.GrowsliceNoAlias, nargs: 5, ptr: 0, size: 2, resPtr: 0, resSize: 2}, true
+	case ir.Syms.GrowsliceBuf, ir.Syms.GrowsliceBufNoAlias:
+		return ownedCall{noAlias: ir.Syms.GrowsliceBufNoAlias, nargs: 7, ptr: 0, size: 2, resPtr: 0, resSize: 2}, true
+	case ir.Syms.Concatstring2, ir.Syms.Concatstring2NoAlias:
+		return ownedCall{noAlias: ir.Syms.Concatstring2NoAlias, nargs: 5, ptr: 1, size: 2, resPtr: 0, resSize: 1, str: true}, true
+	case ir.Syms.Concatstring3, ir.Syms.Concatstring3NoAlias:
+		return ownedCall{noAlias: ir.Syms.Concatstring3NoAlias, nargs: 7, ptr: 1, size: 2, resPtr: 0, resSize: 1, str: true}, true
 	}
-	return nil, 0
+	return ownedCall{}, false
 }
 
 type ownState struct {
@@ -106,10 +150,10 @@ func (o *ownState) init() {
 	}
 }
 
-// check reports why the old backing store of growslice call g might still
+// check reports why the old object of call g, described by d, might still
 // be referenced after g, or "" if it cannot be.
-func (o *ownState) check(g *ssa.Value) string {
-	roots, why := o.origins(g.Args[0], g.Args[2])
+func (o *ownState) check(g *ssa.Value, d ownedCall) string {
+	roots, why := o.origins(g.Args[d.ptr], g.Args[d.size], g, d)
 	if why != "" {
 		return why
 	}
@@ -175,11 +219,12 @@ func (o *ownState) check(g *ssa.Value) string {
 	return ""
 }
 
-// origins follows a slice pointer p and capacity c back through Phis and
-// Copies and returns the heap allocations they can come from. It fails if
-// they can come from anything other than nil, the stack, or the start and
-// full capacity of an allocation.
-func (o *ownState) origins(p, c *ssa.Value) (roots []*ssa.Value, why string) {
+// origins follows a slice pointer p and capacity c, or a string pointer p
+// and length c, back through Phis and Copies and returns the heap
+// allocations they can come from. It fails if they can come from anything
+// other than nil, the stack, a string literal, or the start and full
+// capacity or length of an allocation.
+func (o *ownState) origins(p, c, g *ssa.Value, d ownedCall) (roots []*ssa.Value, why string) {
 	type pair struct{ p, c *ssa.Value }
 	seen := make(map[[2]ssa.ID]bool)
 	stack := []pair{{p, c}}
@@ -196,6 +241,9 @@ func (o *ownState) origins(p, c *ssa.Value) (roots []*ssa.Value, why string) {
 			p.Op == ssaop.OpAddr && p.Aux == ir.Syms.Zerobase:
 			// The runtime does not free nil, the stack, or zero-sized
 			// allocations.
+		case d.str && p.Op == ssaop.OpAddr:
+			// A string literal. The runtime frees or extends only heap
+			// objects.
 		case p.Op == ssaop.OpPhi:
 			for j, a := range p.Args {
 				if c.Op == ssaop.OpPhi && c.Block == p.Block {
@@ -208,18 +256,28 @@ func (o *ownState) origins(p, c *ssa.Value) (roots []*ssa.Value, why string) {
 			for _, a := range c.Args {
 				stack = append(stack, pair{p, a})
 			}
-		case p.Op == ssaop.OpSelectN && p.AuxInt == 0:
+		case p.Op == ssaop.OpSelectN:
 			call := p.Args[0]
 			if !isStaticCall(call) {
 				return nil, "pointer comes from " + call.Op.String()
 			}
-			switch fn := call.Aux.(*ssa.AuxCall).Fn; fn {
-			case ir.Syms.Growslice, ir.Syms.GrowsliceNoAlias, ir.Syms.GrowsliceBuf, ir.Syms.GrowsliceBufNoAlias:
-				if c.Op != ssaop.OpSelectN || c.AuxInt != 2 || c.Args[0] != call {
+			fn := call.Aux.(*ssa.AuxCall).Fn
+			if cd, ok := ownedCallOf(fn); ok {
+				if cd.str != d.str || p.AuxInt != cd.resPtr {
+					return nil, "pointer comes from " + fn.Name
+				}
+				if c.Op != ssaop.OpSelectN || c.AuxInt != cd.resSize || c.Args[0] != call {
 					return nil, "capacity is not that of the allocation"
 				}
-			default:
-				if (fn.Name != "runtime.makeslice" && fn.Name != "runtime.makeslice64") || len(call.Args) != 4 {
+				if cd.str && call != g && fn != cd.noAlias {
+					return nil, "string may be an operand of " + fn.Name
+				}
+			} else if d.str && freshString[fn.Name] {
+				if p.AuxInt != 0 || c.Op != ssaop.OpSelectN || c.AuxInt != 1 || c.Args[0] != call {
+					return nil, "length is not that of the string"
+				}
+			} else {
+				if d.str || p.AuxInt != 0 || (fn.Name != "runtime.makeslice" && fn.Name != "runtime.makeslice64") || len(call.Args) != 4 {
 					return nil, "pointer comes from " + fn.Name
 				}
 				if stripCopies(call.Args[2]) != c {
@@ -276,9 +334,15 @@ func (o *ownState) borrows(u, a *ssa.Value) bool {
 		return true
 	case ssaop.OpStaticCall, ssaop.OpStaticLECall:
 		fn := u.Aux.(*ssa.AuxCall).Fn
-		if _, n := noAliasGrow(fn); n != 0 || fn == ir.Syms.GrowsliceNoAlias || fn == ir.Syms.GrowsliceBufNoAlias {
-			// Copies the old array. Freeing it is decided at that call.
-			return u.Args[0] == a
+		if d, ok := ownedCallOf(fn); ok {
+			if !d.str {
+				// Copies the old array. Freeing it is decided at that call.
+				return u.Args[0] == a
+			}
+			// A NoAlias concatenation copies its operands and decides at
+			// that call whether it consumes the first. A plain one may
+			// return an operand.
+			return fn == d.noAlias
 		}
 		if fn == ir.Syms.Memmove || fn == ir.Syms.Memequal || nonRetaining[fn.Name] {
 			return true
@@ -319,6 +383,15 @@ var nonRetaining = map[string]bool{
 	"runtime.slicerunetostring":    true,
 	"runtime.cmpstring":            true,
 	"runtime.makeslicecopy":        true,
+	"runtime.stringtoslicebyte":    true,
+	"runtime.stringtoslicerune":    true,
+}
+
+// freshString lists runtime calls whose string result is always a new
+// copy, on the heap or in the caller's stack buffer.
+var freshString = map[string]bool{
+	"runtime.slicebytetostring": true,
+	"runtime.slicerunetostring": true,
 }
 
 func escapeString(u *ssa.Value) string {

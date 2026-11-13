@@ -79,6 +79,8 @@ var runtimeDecls = [...]struct {
 	{"concatstring4", funcTag, 38},
 	{"concatstring5", funcTag, 39},
 	{"concatstrings", funcTag, 41},
+	{"concatstring2NoAlias", funcTag, 36},
+	{"concatstring3NoAlias", funcTag, 37},
 	{"concatbyte2", funcTag, 43},
 	{"concatbyte3", funcTag, 44},
 	{"concatbyte4", funcTag, 45},

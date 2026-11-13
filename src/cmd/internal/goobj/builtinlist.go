@@ -58,6 +58,8 @@ var builtins = [...]struct {
 	{"runtime.concatstring4", 1},
 	{"runtime.concatstring5", 1},
 	{"runtime.concatstrings", 1},
+	{"runtime.concatstring2NoAlias", 1},
+	{"runtime.concatstring3NoAlias", 1},
 	{"runtime.concatbyte2", 1},
 	{"runtime.concatbyte3", 1},
 	{"runtime.concatbyte4", 1},

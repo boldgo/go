@@ -686,6 +686,11 @@ func SetFreegcCheck(v int32) (old int32) {
 	return old
 }
 
+// ConcatString2NoAlias calls concatstring2NoAlias without a stack buffer.
+func ConcatString2NoAlias(a0, a1 string) string {
+	return concatstring2NoAlias(nil, a0, a1)
+}
+
 // FreegcCheck returns the GODEBUG=freegccheck setting.
 func FreegcCheck() int32 {
 	return debug.freegccheck
