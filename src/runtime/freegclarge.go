@@ -59,7 +59,10 @@ func freegcLarge(ptr unsafe.Pointer) {
 		freegcCheckRecord(c, ptr, s.elemsize)
 	} else {
 		if c.reusableLargeN == len(c.reusableLarge) {
-			// Forget the oldest; the next cycle collects it.
+			// Forget the oldest; the next cycle collects it. Until
+			// then its memory is allocated, so heapLive counts it
+			// again.
+			c.creditHeapLive(int64(c.reusableLarge[0].elemsize))
 			copy(c.reusableLarge[:], c.reusableLarge[1:])
 			c.reusableLargeN--
 		}

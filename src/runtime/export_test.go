@@ -701,6 +701,8 @@ func FreegcCheckReported() uint64 {
 	return freegcCheckReported
 }
 
+const ReusableLargeSpans = reusableLargeSpans
+
 func HeapLive() uint64 {
 	return gcController.heapLive.Load()
 }

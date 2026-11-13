@@ -119,6 +119,46 @@ func TestFreegcCreditsHeapLive(t *testing.T) {
 	}
 }
 
+func TestFreegcLargeEvictionKeepsHeapLive(t *testing.T) {
+	skipUnlessFreegcReuses(t)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+	const n, size = 16, 256 << 10
+	objs := make([][]byte, n)
+	for try := 0; ; try++ {
+		runtime.GC()
+		for i := range objs {
+			objs[i] = make([]byte, size)
+		}
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		gcs := stats.NumGC
+		before := runtime.HeapLive()
+		for i, b := range objs {
+			objs[i] = nil
+			runtime.Freegc(unsafe.Pointer(unsafe.SliceData(b)), size, true)
+		}
+		after := runtime.HeapLive()
+		runtime.ReadMemStats(&stats)
+		if stats.NumGC != gcs {
+			if try < 5 {
+				continue
+			}
+			t.Skip("a GC ran during every attempt")
+		}
+		// Only the spans the P keeps for reuse leave heapLive; the ones
+		// it forgets stay allocated until the next GC. Up to
+		// freegcCreditFlush of credit may still be pending on the P.
+		const kept, slack = runtime.ReusableLargeSpans * size, 64 << 10
+		if before < after || before-after > kept+slack || before-after+slack < kept {
+			t.Errorf("heapLive went from %d to %d after freeing %d large objects, want a drop of %d (the spans kept for reuse)", before, after, n, kept)
+		}
+		return
+	}
+}
+
 func TestFreegcProfiled(t *testing.T) {
 	skipUnlessFreegcReuses(t)
 	defer func(old int) { runtime.MemProfileRate = old }(runtime.MemProfileRate)
