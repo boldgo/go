@@ -120,6 +120,11 @@ int addNonblocking(int x, int y) {
 	return x+y;
 }
 
+#cgo nocallback addNocallback
+int addNocallback(int x, int y) {
+	return x+y;
+}
+
 // escape vs noescape
 
 #cgo noescape handleGoStringPointerNoescape
@@ -1194,6 +1199,15 @@ func benchCgoCall(b *testing.B) {
 
 		for i := 0; i < b.N; i++ {
 			C.addNonblocking(x, y)
+		}
+	})
+
+	b.Run("add-int-nocallback", func(b *testing.B) {
+		const x = C.int(2)
+		const y = C.int(3)
+
+		for i := 0; i < b.N; i++ {
+			C.addNocallback(x, y)
 		}
 	})
 
