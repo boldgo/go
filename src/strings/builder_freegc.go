@@ -66,7 +66,7 @@ func (b *Builder) appendByte(c byte) {
 // bytes, as append would grow it, and frees the old buffer unless a
 // string from String uses it.
 func (b *Builder) growFree(n int) []byte {
-	buf := bytealg.Grow(b.buf, n, !b.shared)
+	buf := bytealg.Grow(&b.buf, n, !b.shared)
 	b.shared = false
 	return buf
 }
