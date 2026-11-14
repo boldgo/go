@@ -194,3 +194,44 @@ func TestIncompatibleDeclarations(t *testing.T) {
 		regexp.MustCompile("inconsistent definitions for C[.]g"),
 	}, "issue67699a.go", "issue67699b.go")
 }
+
+func TestPointerCheckElided(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+	t.Parallel()
+
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", filepath.Join(t.TempDir(), "ptrelide"), "-gcflags=-S", path("ptrelide.go"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%#q: %v:\n%s", cmd, err, out)
+	}
+	// -S prints each function as "main.name STEXT ..." followed by its
+	// instructions. A check sits in the closure cmd/cgo wraps the call
+	// in, so count a closure's calls for the function enclosing it.
+	calls := map[string]int{}
+	var fn string
+	for line := range strings.Lines(string(out)) {
+		if i := strings.Index(line, " STEXT"); i > 0 && !strings.HasPrefix(line, "\t") {
+			fn = strings.TrimPrefix(line[:i], "main.")
+			if j := strings.Index(fn, ".func"); j > 0 {
+				fn = fn[:j]
+			}
+			calls[fn] += 0
+			continue
+		}
+		if strings.Contains(line, "CALL") && strings.Contains(line, "runtime.cgoCheckPointer") {
+			calls[fn]++
+		}
+	}
+	for _, name := range []string{"bytesElided", "arrayElided", "fieldElided", "sliceElided", "pointersKept", "fieldKept", "bareKept"} {
+		n, ok := calls[name]
+		switch {
+		case !ok:
+			t.Errorf("no assembly found for %s", name)
+		case strings.HasSuffix(name, "Elided") && n != 0:
+			t.Errorf("%s calls runtime.cgoCheckPointer %d times, want 0", name, n)
+		case strings.HasSuffix(name, "Kept") && n == 0:
+			t.Errorf("%s does not call runtime.cgoCheckPointer", name)
+		}
+	}
+}

@@ -618,6 +618,16 @@ func (w *walkState) walkCall(n *ir.CallExpr, init *ir.Nodes) ir.Node {
 				return w.walkExpr(n.Args[1], init)
 			}
 		}
+		if fn != nil && fn.Class == ir.PFUNC && fn.Linksym().Name == "runtime.cgoCheckPointer" && cgoCheckPointerNoop(n) {
+			// The check cmd/cgo inserts before a call to C cannot
+			// fail; keep only the evaluation of its operands.
+			for _, arg := range n.Args {
+				if arg.Op() == ir.OCONVIFACE {
+					w.appendWalkStmt(init, ir.NewAssignStmt(arg.Pos(), ir.BlankNode, arg.(*ir.ConvExpr).X))
+				}
+			}
+			return ir.NewBlockStmt(n.Pos(), nil)
+		}
 	}
 
 	if name, ok := n.Fun.(*ir.Name); ok {
@@ -1185,4 +1195,35 @@ func (w *walkState) usefield(n *ir.SelectorExpr) {
 		w.curfunc.FieldTrack = make(map[*obj.LSym]struct{})
 	}
 	w.curfunc.FieldTrack[sym] = struct{}{}
+}
+
+// cgoCheckPointerNoop reports whether a call cgoCheckPointer(ptr, arg),
+// which cmd/cgo inserts before passing a Go pointer to C, cannot fail
+// given the static types of its operands. For a slice ptr (from
+// x[i:j]) the runtime checks only the slice's elements. For a pointer
+// ptr, cmd/cgo passes as arg the slice or array a pointer &x[i] points
+// into, or true for a pointer &x.f, and the runtime checks only that
+// slice, array or pointed-to type. Either way, if what it checks holds no
+// pointers, it returns without looking at memory.
+func cgoCheckPointerNoop(n *ir.CallExpr) bool {
+	if len(n.Args) != 2 || n.Args[0].Op() != ir.OCONVIFACE {
+		return false
+	}
+	pt := n.Args[0].(*ir.ConvExpr).X.Type()
+	if pt.IsSlice() {
+		return !pt.Elem().HasPointers()
+	}
+	if (!pt.IsPtr() && !pt.IsUnsafePtr()) || n.Args[1].Op() != ir.OCONVIFACE {
+		return false
+	}
+	at := n.Args[1].(*ir.ConvExpr).X.Type()
+	switch {
+	case at.IsSlice(), at.IsArray():
+		return !at.Elem().HasPointers()
+	case at.IsPtr() && at.Elem().IsArray():
+		return !at.Elem().Elem().HasPointers()
+	case at.IsBoolean():
+		return pt.IsPtr() && !pt.Elem().HasPointers()
+	}
+	return false
 }
