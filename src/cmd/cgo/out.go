@@ -108,8 +108,6 @@ func (p *Package) writeDefs() {
 		fmt.Fprintf(fgo2, "//go:noescape\n")
 		fmt.Fprintf(fgo2, "func _Cgo_keepalive(interface{})\n")
 	}
-	fmt.Fprintf(fgo2, "//go:linkname _Cgo_no_callback runtime.cgoNoCallback\n")
-	fmt.Fprintf(fgo2, "func _Cgo_no_callback(bool)\n")
 
 	typedefNames := make([]string, 0, len(typedef))
 	for name := range typedef {
@@ -662,26 +660,21 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 		arg = "uintptr(unsafe.Pointer(&r1))"
 	}
 
-	noCallback := p.noCallbacks[n.C]
-	if noCallback {
-		// disable cgocallback, will check it in runtime.
-		fmt.Fprintf(fgo2, "\t_Cgo_no_callback(true)\n")
-	}
-
 	prefix := ""
 	if n.AddError {
 		prefix = "errno := "
 	}
+	// The runtime rejects callbacks from nocallback and nonblocking
+	// functions.
 	call := "_cgo_runtime_cgocall"
 	if p.nonBlocking[n.C] {
 		call = "_cgo_runtime_cgocallnonblocking"
+	} else if p.noCallbacks[n.C] {
+		call = "_cgo_runtime_cgocallnocallback"
 	}
 	fmt.Fprintf(fgo2, "\t%s%s(%s, %s)\n", prefix, call, cname, arg)
 	if n.AddError {
 		fmt.Fprintf(fgo2, "\tif errno != 0 { r2 = syscall.Errno(errno) }\n")
-	}
-	if noCallback {
-		fmt.Fprintf(fgo2, "\t_Cgo_no_callback(false)\n")
 	}
 
 	// Use _Cgo_keepalive instead of _Cgo_use when noescape & nocallback exist,
@@ -1748,6 +1741,9 @@ func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
 
 //go:linkname _cgo_runtime_cgocallnonblocking runtime.cgocallNonblocking
 func _cgo_runtime_cgocallnonblocking(unsafe.Pointer, uintptr) int32
+
+//go:linkname _cgo_runtime_cgocallnocallback runtime.cgocallNoCallback
+func _cgo_runtime_cgocallnocallback(unsafe.Pointer, uintptr) int32
 
 //go:linkname _cgoCheckPointer runtime.cgoCheckPointer
 //go:noescape
