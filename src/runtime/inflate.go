@@ -308,7 +308,98 @@ func (f *inflater) decode(h *huffman) int {
 	return -1
 }
 
+// codes decodes a block's literals and matches with h.lit and h.dist.
 func (f *inflater) codes() bool {
+	// While the input holds a whole 8-byte load and the output has room
+	// for the longest match, decode with the state in locals and refill
+	// once per symbol; codesTail finishes the block.
+	in, out := f.in, f.out
+	pos, n := f.pos, f.n
+	bits, nbits := f.bits, f.nbits
+	lit, dist := &f.lit, &f.dist
+	for len(in)-pos >= 8 && len(out)-n >= 258 {
+		if nbits < 48 {
+			// The bits loaded past nbits are the stream's next bits in
+			// place, so loading them again changes nothing.
+			p := in[pos : pos+8]
+			bits |= (uint64(p[0]) | uint64(p[1])<<8 | uint64(p[2])<<16 | uint64(p[3])<<24 |
+				uint64(p[4])<<32 | uint64(p[5])<<40 | uint64(p[6])<<48 | uint64(p[7])<<56) << nbits
+			pos += int((63 - nbits) >> 3)
+			nbits |= 56
+		}
+		// At least 48 bits are loaded: enough for the longest length
+		// code, its extra bits, the longest distance code and its extra
+		// bits.
+		var sym int
+		if e := lit.fast[bits&(1<<inflateFastBits-1)]; e != 0 {
+			bits >>= e & 15
+			nbits -= uint(e & 15)
+			sym = int(e >> 4)
+		} else {
+			f.pos, f.bits, f.nbits = pos, bits, nbits
+			sym = f.decode(lit)
+			pos, bits, nbits = f.pos, f.bits, f.nbits
+			if sym < 0 {
+				return false
+			}
+		}
+		if sym < 256 {
+			out[n] = byte(sym)
+			n++
+			continue
+		}
+		if sym == 256 {
+			f.pos, f.n, f.bits, f.nbits = pos, n, bits, nbits
+			return true
+		}
+		sym -= 257
+		if sym >= len(inflateLenBase) {
+			return false
+		}
+		eb := uint(inflateLenExtra[sym])
+		length := int(inflateLenBase[sym]) + int(bits&(1<<eb-1))
+		bits >>= eb
+		nbits -= eb
+		var d int
+		if e := dist.fast[bits&(1<<inflateFastBits-1)]; e != 0 {
+			bits >>= e & 15
+			nbits -= uint(e & 15)
+			d = int(e >> 4)
+		} else {
+			f.pos, f.bits, f.nbits = pos, bits, nbits
+			d = f.decode(dist)
+			pos, bits, nbits = f.pos, f.bits, f.nbits
+			if d < 0 {
+				return false
+			}
+		}
+		if d >= len(inflateDistBase) {
+			return false
+		}
+		eb = uint(inflateDistExtra[d])
+		d = int(inflateDistBase[d]) + int(bits&(1<<eb-1))
+		bits >>= eb
+		nbits -= eb
+		if d > n {
+			return false
+		}
+		src := n - d
+		if d >= length {
+			copy(out[n:n+length], out[src:src+length])
+		} else {
+			for i := 0; i < length; i++ {
+				out[n+i] = out[src+i]
+			}
+		}
+		n += length
+	}
+	f.pos, f.n, f.bits, f.nbits = pos, n, bits, nbits
+	return f.codesTail()
+}
+
+// codesTail is codes for the end of the input or output, checking every
+// load and store.
+func (f *inflater) codesTail() bool {
 	for {
 		sym := f.decode(&f.lit)
 		switch {
