@@ -121,3 +121,21 @@ func LastIndexRabinKarp[T string | []byte](s, sep T) int {
 // It is the caller's responsibility to ensure uninitialized bytes
 // do not leak to the end user.
 func MakeNoZero(n int) []byte
+
+// Free frees the array that b's capacity spans, for reuse by a later
+// allocation. The caller must own the array: no other reference to it
+// may be used again. Free does nothing without the runtimefreegc
+// experiment, for an array smaller than 256 bytes, which costs less to
+// leave to the garbage collector, or when the array is not a heap object
+// of b's capacity.
+//
+//go:noescape
+func Free(b []byte)
+
+// Grow returns a slice holding b's contents with room for n more bytes,
+// which must not fit in b's capacity. It grows b as append would, but
+// leaves the bytes past len(b) unset. If free is true, Grow frees b's
+// array as Free does, and the caller must own it.
+//
+//go:noescape
+func Grow(b []byte, n int, free bool) []byte

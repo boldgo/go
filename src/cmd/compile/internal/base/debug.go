@@ -44,6 +44,7 @@ type DebugFlags struct {
 	FreegcSSA             int    `help:"free old append backing stores proven dead in SSA (0 disabled, 1 enabled, 2 enabled + log, 3 also log rejections)" concurrent:"ok"`
 	FreegcScope           int    `help:"free the heap object of a non-escaping make when its scope ends (0 disabled, 1 enabled, 2 enabled + log)" concurrent:"ok"`
 	FreegcFresh           int    `help:"log results the SSA ownership pass proves fresh (1), and why others are not (2)" concurrent:"ok"`
+	FreegcMinBytes        int    `help:"smallest array internal/bytealg.Free frees (default 256)" concurrent:"ok"`
 	GCAdjust              int    `help:"log adjustments to GOGC" concurrent:"ok"`
 	GCCheck               int    `help:"check heap/gc use by compiler" concurrent:"ok"`
 	GCProg                int    `help:"print dump of GC programs"`

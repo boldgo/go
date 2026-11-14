@@ -17,6 +17,7 @@ import (
 	"cmd/compile/internal/ssa/ssaop"
 	"cmd/compile/internal/typecheck"
 	"cmd/compile/internal/types"
+	"cmd/internal/obj"
 	"cmd/internal/sys"
 )
 
@@ -168,6 +169,92 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			return nil
 		},
 		sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64)
+
+	/******** internal/bytealg ********/
+	// Free is an intrinsic so that the inliner does not charge a call to
+	// the code, such as strings.Builder's writes, that frees only when a
+	// buffer grows. It frees nothing without the runtimefreegc experiment,
+	// and no array smaller than 256 bytes: freeing one costs more than the
+	// allocation and collection it saves.
+	freegcEnabled := buildcfg.Experiment.RuntimeFreegc && !cfg.instrumenting
+	// worthFreeing reports whether an array of capacity c is large enough
+	// to free.
+	worthFreeing := func(s *state, c *ssa.Value) *ssa.Value {
+		minBytes := int64(256)
+		if base.Debug.FreegcMinBytes > 0 {
+			minBytes = int64(base.Debug.FreegcMinBytes)
+		}
+		leq := ssaop.OpLeq64U
+		if s.config.PtrSize == 4 {
+			leq = ssaop.OpLeq32U
+		}
+		return s.newValue2(leq, types.Types[types.TBOOL], s.constInt(c.Type, minBytes), c)
+	}
+	add("internal/bytealg", "Free",
+		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+			if !freegcEnabled {
+				return nil
+			}
+			c := s.newValue1(ssaop.OpSliceCap, types.Types[types.TUINTPTR], args[0])
+			large := worthFreeing(s, c)
+			b := s.endBlock()
+			b.Kind = block.BlockIf
+			b.SetControl(large)
+			bFree := s.f.NewBlock(block.BlockPlain)
+			bNext := s.f.NewBlock(block.BlockPlain)
+			b.AddEdgeTo(bFree)
+			b.AddEdgeTo(bNext)
+			s.startBlock(bFree)
+			p := s.newValue1(ssaop.OpSlicePtr, s.f.Config.Types.BytePtr, args[0])
+			s.rtcall(ir.Syms.Freegc, true, nil, p, c, s.constBool(true))
+			s.endBlock().AddEdgeTo(bNext)
+			s.startBlock(bNext)
+			return nil
+		},
+		all...)
+	// Grow is an intrinsic for the same reason as Free: it is the slow path
+	// of strings.Builder's inlined writes. It grows by calling growslice,
+	// or growsliceNoAlias, which also frees the old array, when the caller
+	// allows freeing and the array is large enough.
+	add("internal/bytealg", "Grow",
+		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+			b, num, free := args[0], args[1], args[2]
+			intT := types.Types[types.TINT]
+			p := s.newValue1(ssaop.OpSlicePtr, s.f.Config.Types.BytePtr, b)
+			l := s.newValue1(ssaop.OpSliceLen, intT, b)
+			c := s.newValue1(ssaop.OpSliceCap, intT, b)
+			newLen := s.newValue2(s.ssaOp(ir.OADD, intT), intT, l, num)
+			et := s.reflectType(types.Types[types.TUINT8])
+			grow := func(fn *obj.LSym) *ssa.Value {
+				return s.rtcall(fn, true, []*types.Type{n.Type()}, p, newLen, c, num, et)[0]
+			}
+			var r *ssa.Value
+			if !freegcEnabled {
+				r = grow(ir.Syms.Growslice)
+			} else {
+				cond := s.newValue2(ssaop.OpAndB, types.Types[types.TBOOL], free, worthFreeing(s, c))
+				bEntry := s.endBlock()
+				bEntry.Kind = block.BlockIf
+				bEntry.SetControl(cond)
+				bFree := s.f.NewBlock(block.BlockPlain)
+				bKeep := s.f.NewBlock(block.BlockPlain)
+				bNext := s.f.NewBlock(block.BlockPlain)
+				bEntry.AddEdgeTo(bFree)
+				bEntry.AddEdgeTo(bKeep)
+				s.startBlock(bFree)
+				s.vars[n] = grow(ir.Syms.GrowsliceNoAlias)
+				s.endBlock().AddEdgeTo(bNext)
+				s.startBlock(bKeep)
+				s.vars[n] = grow(ir.Syms.Growslice)
+				s.endBlock().AddEdgeTo(bNext)
+				s.startBlock(bNext)
+				r = s.variable(n, n.Type())
+				delete(s.vars, n)
+			}
+			ptr := s.newValue1(ssaop.OpSlicePtr, s.f.Config.Types.BytePtr, r)
+			return s.newValue3(ssaop.OpSliceMake, n.Type(), ptr, l, s.newValue1(ssaop.OpSliceCap, intT, r))
+		},
+		all...)
 
 	/******** internal/runtime/sys ********/
 	add("internal/runtime/sys", "GetCallerPC",
