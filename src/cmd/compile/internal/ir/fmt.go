@@ -992,32 +992,18 @@ func dumpNodeHeader(w io.Writer, n Node) {
 		}
 	}
 
-	// Print Node-specific booleans by looking for methods.
-	// Different v, t from above - want *Struct not Struct, for methods.
-	v = reflect.ValueOf(n)
-	t = v.Type()
-	nm := t.NumMethod()
-	for i := 0; i < nm; i++ {
-		tm := t.Method(i)
-		if tm.PkgPath != "" {
-			// skip unexported method - call will fail
-			continue
-		}
-		m := v.Method(i)
-		mt := m.Type()
-		if mt.NumIn() == 0 && mt.NumOut() == 1 && mt.Out(0).Kind() == reflect.Bool {
-			// TODO(rsc): Remove the func/defer/recover wrapping,
-			// which is guarding against panics in miniExpr,
-			// once we get down to the simpler state in which
-			// nodes have no getter methods that aren't allowed to be called.
-			func() {
-				defer func() { recover() }()
-				if m.Call(nil)[0].Bool() {
-					name := strings.TrimSuffix(tm.Name, "_")
-					fmt.Fprintf(w, " %s", name)
-				}
-			}()
-		}
+	// Print Node-specific booleans.
+	for _, g := range boolGetters {
+		// TODO(rsc): Remove the func/defer/recover wrapping,
+		// which is guarding against panics in miniExpr,
+		// once we get down to the simpler state in which
+		// nodes have no getter methods that aren't allowed to be called.
+		func() {
+			defer func() { recover() }()
+			if g.get(n) {
+				fmt.Fprintf(w, " %s", g.name)
+			}
+		}()
 	}
 
 	if n.Op() == OCLOSURE {
