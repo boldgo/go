@@ -461,6 +461,22 @@ For example:
 
 	// #cgo nocallback cFunctionName
 
+The #cgo nonblocking directive may be used for a C function that returns
+quickly, never blocks and never calls back into Go, such as one that does
+a short computation on its arguments. A call to it skips the bookkeeping
+that lets the scheduler run other goroutines while the C function runs,
+about half the cost of a call from Go to C. In exchange the goroutine
+keeps its processor for the whole call: other goroutines, the garbage
+collector and stop-the-world operations wait for the call to return.
+If a nonblocking function does call back into Go, the program crashes.
+A function that blocks, for example on I/O or a lock, can stall the
+whole program; and if it waits for something only a Go goroutine
+provides, the program may deadlock.
+
+For example:
+
+	// #cgo nonblocking cFunctionName
+
 # Special cases
 
 A few special C types which would normally be represented by a pointer

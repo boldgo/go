@@ -52,6 +52,7 @@ type Package struct {
 	Preamble    string          // collected preamble for _cgo_export.h
 	noCallbacks map[string]bool // C function names with #cgo nocallback directive
 	noEscapes   map[string]bool // C function names with #cgo noescape directive
+	nonBlocking map[string]bool // C function names with #cgo nonblocking directive
 }
 
 // A typedefInfo is an element on Package.typedefList: a typedef name
@@ -74,6 +75,7 @@ type File struct {
 	NamePos     map[*Name]token.Pos // map from Name to position of the first reference
 	NoCallbacks map[string]bool     // C function names with #cgo nocallback directive
 	NoEscapes   map[string]bool     // C function names with #cgo noescape directive
+	NonBlocking map[string]bool     // C function names with #cgo nonblocking directive
 	Edit        *edit.Buffer
 
 	debugs []*debug // debug data from iterations of gccDebug. Initialized by File.loadDebug.
@@ -495,6 +497,12 @@ func main() {
 		}
 	}
 
+	for funcName := range p.nonBlocking {
+		if _, found := cFunctions[funcName]; !found {
+			error_(token.NoPos, "#cgo nonblocking %s: no matched C function", funcName)
+		}
+	}
+
 	if !*godefs {
 		p.writeDefs()
 	}
@@ -536,6 +544,7 @@ func newPackage(args []string) *Package {
 		Written:     make(map[string]bool),
 		noCallbacks: make(map[string]bool),
 		noEscapes:   make(map[string]bool),
+		nonBlocking: make(map[string]bool),
 	}
 	p.addToFlag("CFLAGS", args)
 	return p
@@ -595,9 +604,10 @@ func (p *Package) Record(f *File) {
 		}
 	}
 
-	// merge nocallback & noescape
+	// merge nocallback, noescape and nonblocking
 	maps.Copy(p.noCallbacks, f.NoCallbacks)
 	maps.Copy(p.noEscapes, f.NoEscapes)
+	maps.Copy(p.nonBlocking, f.NonBlocking)
 
 	if f.ExpFunc != nil {
 		p.ExpFunc = append(p.ExpFunc, f.ExpFunc...)
