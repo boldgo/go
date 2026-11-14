@@ -415,3 +415,38 @@ func TestPGOZeroValues(t *testing.T) {
 	gcflag := fmt.Sprintf("-pgoprofile=%s", profFile)
 	buildPGOInliningTest(t, dir, gcflag)
 }
+
+// TestPGONestedInlining tests that a hot call site in the body of an inlined
+// function is still hot: Loop inlines Step, and the hot call from Step to
+// step, too big for the default budget, is inlined into Loop as well.
+func TestPGONestedInlining(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("error getting wd: %v", err)
+	}
+	srcDir := filepath.Join(wd, "testdata/pgo/nested")
+	dir := t.TempDir()
+	for _, file := range []string{"nested.go", "nested.pprof.node_map"} {
+		if err := copyFile(filepath.Join(dir, file), filepath.Join(srcDir, file)); err != nil {
+			t.Fatalf("error copying %s: %v", file, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/pgo/nested\ngo 1.26\n"), 0644); err != nil {
+		t.Fatalf("error writing go.mod: %v", err)
+	}
+
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-gcflags=-pgoprofile=nested.pprof.node_map -d=pgodebug=1", ".")
+	cmd.Dir = dir
+	cmd = testenv.CleanCmdEnv(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build failed: %v, output:\n%s", err, out)
+	}
+	want := regexp.MustCompile(`hot-budget check allows inlining for call example\.com/pgo/nested\.\(\*acc\)\.step .* in function example\.com/pgo/nested\.Loop\n`)
+	if !want.Match(out) {
+		t.Errorf("(*acc).step not inlined into Loop; output:\n%s", out)
+	}
+}

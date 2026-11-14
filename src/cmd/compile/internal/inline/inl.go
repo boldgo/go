@@ -72,6 +72,16 @@ var (
 	// TODO(prattmic): Make this non-global.
 	candHotEdgeMap = make(map[pgoir.CallSiteInfo]struct{})
 
+	// Hot call sites by the linker name of the calling function. A call
+	// in the body of an inlined function is looked up here, since the
+	// profile attributes it to the inlined function, not to the function
+	// being compiled.
+	candHotNamedEdgeMap = make(map[namedCallSite]struct{})
+
+	// Start line of each function inlined while PGO is on, by inlining
+	// index.
+	inlStartLine = make(map[int]int)
+
 	// Threshold in percentage for hot callsite inlining.
 	inlineHotCallSiteThresholdPercent float64
 
@@ -84,6 +94,11 @@ var (
 	// Budget increased due to hotness.
 	inlineHotMaxBudget int32 = 2000
 )
+
+type namedCallSite struct {
+	caller     string
+	lineOffset int
+}
 
 func IsPgoHotFunc(fn *ir.Func, profile *pgoir.Profile) bool {
 	if profile == nil {
@@ -130,6 +145,7 @@ func PGOInlinePrologue(p *pgoir.Profile) {
 			csi := pgoir.CallSiteInfo{LineOffset: n.CallSiteOffset, Caller: caller.AST}
 			candHotEdgeMap[csi] = struct{}{}
 		}
+		candHotNamedEdgeMap[namedCallSite{n.CallerName, n.CallSiteOffset}] = struct{}{}
 	}
 
 	if base.Debug.PGODebug >= 3 {
@@ -998,9 +1014,7 @@ func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCal
 		}
 	}
 
-	lineOffset := pgoir.NodeLineOffset(n, caller)
-	csi := pgoir.CallSiteInfo{LineOffset: lineOffset, Caller: caller}
-	_, hot := candHotEdgeMap[csi]
+	hot := isHotCallSite(n, caller)
 
 	if metric <= maxCost {
 		// Simple case. Function is already cheap enough.
@@ -1146,6 +1160,25 @@ func canInlineCallExpr(callerfn *ir.Func, n *ir.CallExpr, callee *ir.Func, bigCa
 	return true, callSiteScore, hot
 }
 
+// isHotCallSite reports whether call n in caller is a hot call site.
+func isHotCallSite(n *ir.CallExpr, caller *ir.Func) bool {
+	if len(candHotNamedEdgeMap) == 0 {
+		return false
+	}
+	idx := base.Ctxt.PosTable.Pos(n.Pos()).Base().InliningIndex()
+	if idx < 0 {
+		_, hot := candHotEdgeMap[pgoir.CallSiteInfo{LineOffset: pgoir.NodeLineOffset(n, caller), Caller: caller}]
+		return hot
+	}
+	start, ok := inlStartLine[idx]
+	if !ok {
+		return false
+	}
+	off := int(base.Ctxt.InnermostPos(n.Pos()).RelLine()) - start
+	_, hot := candHotNamedEdgeMap[namedCallSite{base.Ctxt.InlTree.InlinedFunction(idx).Name, off}]
+	return hot
+}
+
 // mkinlcall returns an OINLCALL node that can replace OCALLFUNC n, or
 // nil if it cannot be inlined. callerfn is the function that contains
 // n, and fn is the function being called.
@@ -1166,6 +1199,9 @@ func mkinlcall(callerfn *ir.Func, n *ir.CallExpr, fn *ir.Func, bigCaller, closur
 	parent := base.Ctxt.PosTable.Pos(n.Pos()).Base().InliningIndex()
 	sym := fn.Linksym()
 	inlIndex := base.Ctxt.InlTree.Add(parent, n.Pos(), sym, ir.FuncName(fn))
+	if len(candHotNamedEdgeMap) > 0 {
+		inlStartLine[inlIndex] = int(base.Ctxt.InnermostPos(fn.Pos()).RelLine())
+	}
 
 	closureInitLSym := func(n *ir.CallExpr, fn *ir.Func) {
 		// The linker needs FuncInfo metadata for all inlined

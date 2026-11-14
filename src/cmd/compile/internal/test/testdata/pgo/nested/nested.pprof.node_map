@@ -1,0 +1,7 @@
+GO PREPROFILE V1
+example.com/pgo/nested.Loop
+example.com/pgo/nested.(*acc).Step
+2 1000
+example.com/pgo/nested.(*acc).Step
+example.com/pgo/nested.(*acc).step
+0 1000
