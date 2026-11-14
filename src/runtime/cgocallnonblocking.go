@@ -62,3 +62,19 @@ func cgocallNonblocking(fn, arg unsafe.Pointer) int32 {
 	}
 	return errno
 }
+
+// cgocallNoCallback is cgocall for a C function declared with #cgo
+// nocallback. Setting the goroutine's nocallback flag here costs less
+// than calling cgoNoCallback before and after the call.
+//
+// cgocallNoCallback is an internal detail of cgo.
+//
+//go:linkname cgocallNoCallback
+//go:nosplit
+func cgocallNoCallback(fn, arg unsafe.Pointer) int32 {
+	gp := getg()
+	gp.nocgocallback = true
+	errno := cgocall(fn, arg)
+	gp.nocgocallback = false
+	return errno
+}
