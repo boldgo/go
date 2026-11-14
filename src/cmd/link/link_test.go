@@ -2689,3 +2689,171 @@ func main() {
 	}
 }
 `
+
+const compressPclntabSrc = `
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+)
+
+//go:noinline
+func f(n int) {
+	if n == 0 {
+		pcs := make([]uintptr, 10)
+		frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+		for {
+			fr, more := frames.Next()
+			fmt.Println(fr.Function, fr.Line)
+			if !more {
+				break
+			}
+		}
+		panic("boom")
+	}
+	f(n - 1)
+}
+
+func main() {
+	if len(os.Args) > 1 {
+		// Ask for no function name, file or line.
+		fmt.Println(os.Args[1])
+		return
+	}
+	f(2)
+}
+`
+
+func TestCompressPclntab(t *testing.T) {
+	// Test that a binary linked with -compresspclntab reports the same
+	// functions, files and lines, to itself and to debug/gosym, as one
+	// linked without it, is smaller, and inflates its tables only when
+	// asked for a name, a file or a line.
+	testenv.MustHaveGoBuild(t)
+
+	t.Parallel()
+
+	tmpdir := t.TempDir()
+	src := filepath.Join(tmpdir, "x.go")
+	if err := os.WriteFile(src, []byte(compressPclntabSrc), 0666); err != nil {
+		t.Fatal(err)
+	}
+	hex := regexp.MustCompile(`0x[0-9a-f]+`)
+	var exes, outs, lines [2]string
+	var sizes [2]int64
+	for i, flag := range []string{"", "-compresspclntab"} {
+		exe := filepath.Join(tmpdir, fmt.Sprintf("x%d.exe", i))
+		exes[i] = exe
+		out, err := goCmd(t, "build", "-ldflags="+flag, "-o", exe, src).CombinedOutput()
+		if err != nil {
+			t.Fatalf("build with %q failed: %v\n%s", flag, err, out)
+		}
+		out, err = testenv.Command(t, exe).CombinedOutput()
+		if err == nil {
+			t.Fatalf("with %q: program did not panic:\n%s", flag, out)
+		}
+		outs[i] = hex.ReplaceAllString(string(out), "0x?")
+
+		f, err := objfile.Open(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tab, err := f.PCLineTable()
+		if err != nil {
+			t.Fatalf("with %q: %v", flag, err)
+		}
+		syms, err := f.Symbols()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, s := range syms {
+			if s.Code == 'T' && strings.HasPrefix(s.Name, "main.") {
+				file, line, fn := tab.PCToLine(s.Addr)
+				name := "<nil>"
+				if fn != nil {
+					name = fn.Name
+				}
+				fmt.Fprintf(&b, "%s: %s %s:%d\n", s.Name, name, filepath.Base(file), line)
+			}
+		}
+		f.Close()
+		lines[i] = b.String()
+
+		fi, err := os.Stat(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sizes[i] = fi.Size()
+	}
+	for _, want := range []string{"main.f 14\n", "main.f 24\n", "main.main 33\n", "x.go:22 ", "x.go:33 "} {
+		if !strings.Contains(outs[1], want) {
+			t.Errorf("with -compresspclntab, output lacks %q", want)
+		}
+	}
+	if t.Failed() {
+		t.Logf("output with -compresspclntab:\n%s", outs[1])
+	}
+	if outs[0] != outs[1] {
+		t.Errorf("output differs with -compresspclntab:\n%s\n=== without:\n%s", outs[1], outs[0])
+	}
+	if lines[1] == "" || !strings.Contains(lines[1], "main.main: main.main x.go:") {
+		t.Errorf("with -compresspclntab, debug/gosym reports:\n%s", lines[1])
+	}
+	if lines[0] != lines[1] {
+		t.Errorf("debug/gosym reports differ with -compresspclntab:\n%s\n=== without:\n%s", lines[1], lines[0])
+	}
+	if sizes[1] >= sizes[0] {
+		t.Errorf("-compresspclntab binary is %d bytes, not smaller than %d", sizes[1], sizes[0])
+	}
+
+	// Corrupt the deflated tables. The program must still run as long as
+	// it asks for no name, file or line, which shows that it inflates
+	// nothing until then, and must report the damage, not crash, when it
+	// asks.
+	ef, err := elf.Open(exes[1])
+	if err != nil {
+		t.Skipf("not ELF, skipping the corrupted-table checks: %v", err)
+	}
+	sect := ef.Section(".gopclntab")
+	if sect == nil {
+		ef.Close()
+		t.Fatal("no .gopclntab section")
+	}
+	data, err := sect.Data()
+	ef.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	word := func(i int) uint64 {
+		off := 8 + i*int(data[7])
+		if data[7] == 8 {
+			return ef.ByteOrder.Uint64(data[off:])
+		}
+		return uint64(ef.ByteOrder.Uint32(data[off:]))
+	}
+	bin, err := os.ReadFile(exes[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Words 8 and 9 locate the deflated tables; see
+	// runtime/symtabcompressed.go:pcHeaderCompressed.
+	start := sect.Offset + word(8)
+	for i := start; i < start+min(16, word(9)); i++ {
+		bin[i] = 0xff
+	}
+	bad := filepath.Join(tmpdir, "bad.exe")
+	if err := os.WriteFile(bad, bin, 0777); err != nil {
+		t.Fatal(err)
+	}
+	out, err := testenv.Command(t, bad, "quiet").CombinedOutput()
+	if err != nil || string(out) != "quiet\n" {
+		t.Errorf("with damaged tables, a program that asks for no line printed %q, err %v; want %q", out, err, "quiet\n")
+	}
+	out, _ = testenv.Command(t, bad).CombinedOutput()
+	if !strings.Contains(string(out), "cannot inflate") || strings.Contains(string(out), "fatal error") {
+		t.Errorf("with damaged tables, a program that asks for lines printed:\n%s\nwant a report that it cannot inflate them, and no fatal error", out)
+	}
+}

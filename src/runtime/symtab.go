@@ -623,7 +623,7 @@ const debugPcln = false
 func moduledataverify1(datap *moduledata) {
 	// Check that the pclntab's format is valid.
 	hdr := datap.pcHeader
-	if hdr.magic != abi.CurrentPCLnTabMagic || hdr.pad1 != 0 || hdr.pad2 != 0 ||
+	if hdr.magic != abi.CurrentPCLnTabMagic && hdr.magic != abi.CompressedPCLnTabMagic || hdr.pad1 != 0 || hdr.pad2 != 0 ||
 		hdr.minLC != sys.PCQuantum || hdr.ptrSize != goarch.PtrSize {
 		println("runtime: pcHeader: magic=", hex(hdr.magic), "pad1=", hdr.pad1, "pad2=", hdr.pad2,
 			"minLC=", hdr.minLC, "ptrSize=", hdr.ptrSize, "pluginpath=", datap.pluginpath)
@@ -760,7 +760,13 @@ func (md *moduledata) funcName(nameOff int32) string {
 	if nameOff == 0 {
 		return ""
 	}
-	return gostringnocopy(&md.funcnametab[nameOff])
+	tab := md.funcnametab
+	if md.compressedTabs() {
+		if tab = md.inflatedFuncnametab(); int(nameOff) >= len(tab) {
+			return ""
+		}
+	}
+	return gostringnocopy(&tab[nameOff])
 }
 
 // Despite being an exported symbol,
@@ -1074,7 +1080,11 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 		return -1, 0
 	}
 	datap := f.datap
-	p := datap.pctab[off:]
+	p := datap.pcTable(off)
+	if p == nil {
+		// The compressed tables could not be inflated.
+		return -1, 0
+	}
 	pc := f.entry()
 	prevpc := pc
 	val := int32(-1)
@@ -1128,7 +1138,7 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 
 	print("runtime: invalid pc-encoded table f=", funcname(f), " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
 
-	p = datap.pctab[off:]
+	p = datap.pcTable(off)
 	pc = f.entry()
 	val = -1
 	for {
@@ -1172,9 +1182,15 @@ func funcfile(f funcInfo, fileno int32) string {
 	if !f.valid() {
 		return "?"
 	}
+	cutab, filetab := datap.cutab, datap.filetab
+	if datap.compressedTabs() {
+		if cutab, filetab = datap.inflatedFileTabs(); filetab == nil {
+			return "?"
+		}
+	}
 	// Make sure the cu index and file offset are valid
-	if fileoff := datap.cutab[f.cuOffset+uint32(fileno)]; fileoff != ^uint32(0) {
-		return gostringnocopy(&datap.filetab[fileoff])
+	if fileoff := cutab[f.cuOffset+uint32(fileno)]; fileoff != ^uint32(0) {
+		return gostringnocopy(&filetab[fileoff])
 	}
 	// pcln section is corrupt.
 	return "?"
@@ -1196,7 +1212,11 @@ func funcline1(f funcInfo, targetpc uintptr, strict bool) (file string, line int
 	}
 	fileno, _ := pcvalue(f, f.pcfile, targetpc, strict)
 	line, _ = pcvalue(f, f.pcln, targetpc, strict)
-	if fileno == -1 || line == -1 || int(fileno) >= len(datap.filetab) {
+	filetab := datap.filetab
+	if datap.compressedTabs() {
+		_, filetab = datap.inflatedFileTabs()
+	}
+	if fileno == -1 || line == -1 || int(fileno) >= len(filetab) {
 		// print("looking for ", hex(targetpc), " in ", funcname(f), " got file=", fileno, " line=", lineno, "\n")
 		return "?", 0
 	}

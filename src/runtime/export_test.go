@@ -17,6 +17,8 @@ import (
 	"unsafe"
 )
 
+func Inflate(in, out []byte) bool { return inflate(in, out, new(inflateScratch)) }
+
 var Fadd64 = fadd64
 var Fsub64 = fsub64
 var Fmul64 = fmul64

@@ -5,12 +5,14 @@
 package ld
 
 import (
+	"bytes"
 	"cmd/internal/goobj"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
 	"cmp"
+	"compress/flate"
 	"fmt"
 	"internal/abi"
 	"internal/buildcfg"
@@ -39,6 +41,14 @@ type pclntab struct {
 	filetab     loader.Sym
 	pctab       loader.Sym
 	funcdata    loader.Sym
+	tracetab    loader.Sym
+
+	// Under -compresspclntab, the tables deflated into tracetab, and
+	// their sizes inflated.
+	compressed                                           []byte
+	rawCutab, rawFuncnametab, rawFiletab                 []byte
+	cutabSize, funcnametabSize, filetabSize, linetabSize int
+	linetabBase                                          int64
 
 	// The number of functions + number of TEXT sections - 1. This is such an
 	// unexpected value because platforms that have more than one TEXT section
@@ -254,6 +264,9 @@ func makeInlSyms(ctxt *Link, funcs []loader.Sym, nameOffsets map[loader.Sym]uint
 func (state *pclntab) generatePCHeader(ctxt *Link) {
 	ldr := ctxt.loader
 	size := int64(8 + 8*ctxt.Arch.PtrSize)
+	if ctxt.compressPclntab {
+		size += int64(7 * ctxt.Arch.PtrSize)
+	}
 	writeHeader := func(ctxt *Link, s loader.Sym) {
 		header := ctxt.loader.MakeSymbolUpdater(s)
 
@@ -268,7 +281,11 @@ func (state *pclntab) generatePCHeader(ctxt *Link) {
 
 		// Write header.
 		// Keep in sync with runtime/symtab.go:pcHeader and package debug/gosym.
-		header.SetUint32(ctxt.Arch, 0, uint32(abi.CurrentPCLnTabMagic))
+		magic := abi.CurrentPCLnTabMagic
+		if ctxt.compressPclntab {
+			magic = abi.CompressedPCLnTabMagic
+		}
+		header.SetUint32(ctxt.Arch, 0, uint32(magic))
 		header.SetUint8(ctxt.Arch, 6, uint8(ctxt.Arch.MinLC))
 		header.SetUint8(ctxt.Arch, 7, uint8(ctxt.Arch.PtrSize))
 		off := header.SetUint(ctxt.Arch, 8, uint64(state.nfunc))
@@ -279,6 +296,16 @@ func (state *pclntab) generatePCHeader(ctxt *Link) {
 		off = writeSymOffset(off, state.filetab)
 		off = writeSymOffset(off, state.pctab)
 		off = writeSymOffset(off, state.pclntab)
+		if ctxt.compressPclntab {
+			// Keep in sync with runtime/symtabcompressed.go:pcHeaderCompressed.
+			off = writeSymOffset(off, state.tracetab)
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(len(state.compressed)))
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(state.cutabSize))
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(state.funcnametabSize))
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(state.filetabSize))
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(state.linetabSize))
+			off = header.SetUintptr(ctxt.Arch, off, uintptr(state.linetabBase))
+		}
 		if off != size {
 			panic(fmt.Sprintf("pcHeader size: %d != %d", off, size))
 		}
@@ -333,6 +360,15 @@ func (state *pclntab) generateFuncnametab(ctxt *Link, funcs []loader.Sym) map[lo
 		size += int64(len(ctxt.loader.SymName(s)) + 1) // NULL terminate
 	})
 
+	if ctxt.compressPclntab {
+		buf := make([]byte, size)
+		for s, off := range nameOffsets {
+			copy(buf[off:], ctxt.loader.SymName(s))
+		}
+		state.rawFuncnametab = buf
+		size = 0
+		writeFuncNameTab = func(*Link, loader.Sym) {}
+	}
 	state.funcnametab = state.addGeneratedSym(ctxt, "runtime.funcnametab", size, 1, writeFuncNameTab)
 	return nameOffsets
 }
@@ -429,11 +465,9 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 		totalEntries += uint32(entries)
 	}
 
-	// Write cutab.
-	writeCutab := func(ctxt *Link, s loader.Sym) {
-		sb := ctxt.loader.MakeSymbolUpdater(s)
-
-		var off int64
+	// The cutab and filetab contents.
+	cutab := func() []byte {
+		buf := make([]byte, 0, totalEntries*4)
 		for i, max := range cuEntries {
 			// Write the per CU LUT.
 			cu := compUnits[i]
@@ -445,23 +479,39 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 					// not needed in this binary. When that happens, use an invalid offset.
 					fileOffset = ^uint32(0)
 				}
-				off = sb.SetUint32(ctxt.Arch, off, fileOffset)
+				buf = buf[:len(buf)+4]
+				ctxt.Arch.ByteOrder.PutUint32(buf[len(buf)-4:], fileOffset)
 			}
 		}
+		return buf
 	}
-	state.cutab = state.addGeneratedSym(ctxt, "runtime.cutab", int64(totalEntries*4), 4, writeCutab)
-
-	// Write filetab.
-	writeFiletab := func(ctxt *Link, s loader.Sym) {
-		sb := ctxt.loader.MakeSymbolUpdater(s)
-
-		// Write the strings.
+	filetab := func() []byte {
+		buf := make([]byte, fileSize)
 		for filename, loc := range fileOffsets {
-			sb.AddStringAt(int64(loc), expandFile(filename))
+			copy(buf[loc:], expandFile(filename))
+		}
+		return buf
+	}
+	cutabSize, filetabSize := int64(totalEntries*4), fileSize
+	if ctxt.compressPclntab {
+		state.rawCutab, state.rawFiletab = cutab(), filetab()
+		cutabSize, filetabSize = 0, 0
+	}
+
+	writeCutab := func(ctxt *Link, s loader.Sym) {
+		if cutabSize > 0 {
+			ctxt.loader.MakeSymbolUpdater(s).SetBytesAt(0, cutab())
+		}
+	}
+	state.cutab = state.addGeneratedSym(ctxt, "runtime.cutab", cutabSize, 4, writeCutab)
+
+	writeFiletab := func(ctxt *Link, s loader.Sym) {
+		if filetabSize > 0 {
+			ctxt.loader.MakeSymbolUpdater(s).SetBytesAt(0, filetab())
 		}
 	}
 	state.nfiles = uint32(len(fileOffsets))
-	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", fileSize, 1, writeFiletab)
+	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", filetabSize, 1, writeFiletab)
 
 	return cuOffsets
 }
@@ -502,6 +552,10 @@ func (state *pclntab) generatePctab(ctxt *Link, funcs []loader.Sym) {
 		pcsp, pcfile, pcline, pcinline, pcdata = ldr.PcdataAuxs(s, pcdata)
 
 		pcSyms := []loader.Sym{pcsp, pcfile, pcline}
+		if ctxt.compressPclntab {
+			// The pc-file and pc-line tables go to tracetab below.
+			pcSyms = pcSyms[:1]
+		}
 		for _, pcSym := range pcSyms {
 			saveOffset(pcSym)
 		}
@@ -511,6 +565,9 @@ func (state *pclntab) generatePctab(ctxt *Link, funcs []loader.Sym) {
 		if fi.NumInlTree() > 0 {
 			saveOffset(pcinline)
 		}
+	}
+	if ctxt.compressPclntab {
+		state.generateTracetab(ctxt, funcs, seen, size)
 	}
 
 	// TODO: There is no reason we need a generator for this variable, and it
@@ -526,6 +583,64 @@ func (state *pclntab) generatePctab(ctxt *Link, funcs []loader.Sym) {
 	}
 
 	state.pctab = state.addGeneratedSym(ctxt, "runtime.pctab", size, 1, writePctab)
+}
+
+// generateTracetab deflates the function names, the file tables and the
+// pc-file and pc-line tables into runtime.tracetab, for -compresspclntab.
+// The pc-file and pc-line tables take offsets from linetabBase, past the
+// end of runtime.pctab, of pctabSize bytes; a table that pctab already
+// holds keeps its offset there.
+func (state *pclntab) generateTracetab(ctxt *Link, funcs []loader.Sym, inPctab map[loader.Sym]struct{}, pctabSize int64) {
+	ldr := ctxt.loader
+	base := Rnd(pctabSize, int64(ctxt.Arch.PtrSize)) // the size addGeneratedSym gives runtime.pctab
+	state.linetabBase = base
+	var lines []byte
+	seen := make(map[loader.Sym]bool)
+	var pcdata []loader.Sym
+	for _, s := range funcs {
+		fi := ldr.FuncInfo(s)
+		if !fi.Valid() {
+			continue
+		}
+		_, pcfile, pcline, _, _ := ldr.PcdataAuxs(s, pcdata)
+		for _, pcSym := range []loader.Sym{pcfile, pcline} {
+			if _, ok := inPctab[pcSym]; ok || seen[pcSym] {
+				continue
+			}
+			seen[pcSym] = true
+			data := ldr.Data(pcSym)
+			if len(data) == 0 {
+				// Invalid PC data, record as zero.
+				ldr.SetSymValue(pcSym, 0)
+				continue
+			}
+			ldr.SetSymValue(pcSym, base+int64(len(lines)))
+			lines = append(lines, data...)
+		}
+	}
+
+	state.cutabSize = len(state.rawCutab)
+	state.funcnametabSize = len(state.rawFuncnametab)
+	state.filetabSize = len(state.rawFiletab)
+	state.linetabSize = len(lines)
+	var buf bytes.Buffer
+	w, err := flate.NewWriter(&buf, flate.BestCompression)
+	if err != nil {
+		panic(err)
+	}
+	for _, b := range [][]byte{state.rawCutab, state.rawFuncnametab, state.rawFiletab, lines} {
+		w.Write(b)
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+	state.compressed = buf.Bytes()
+	state.rawCutab, state.rawFuncnametab, state.rawFiletab = nil, nil, nil
+
+	writeTracetab := func(ctxt *Link, s loader.Sym) {
+		ctxt.loader.MakeSymbolUpdater(s).SetBytesAt(0, state.compressed)
+	}
+	state.tracetab = state.addGeneratedSym(ctxt, "runtime.tracetab", int64(len(state.compressed)), 1, writeTracetab)
 }
 
 // generateFuncdata writes out the funcdata information.
@@ -887,6 +1002,9 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		var flag abi.FuncFlag
 		if fi.Valid() {
 			flag = fi.FuncFlag()
+		}
+		if ctxt.compressPclntab && strings.HasPrefix(ldr.SymName(s), "runtime.") {
+			flag |= abi.FuncFlagRuntime
 		}
 		off = sb.SetUint8(ctxt.Arch, off, uint8(flag))
 

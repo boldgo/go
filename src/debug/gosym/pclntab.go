@@ -10,9 +10,11 @@ package gosym
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/binary"
 	"internal/abi"
 	"internal/saferio"
+	"io"
 	"sort"
 	"sync"
 )
@@ -215,6 +217,7 @@ func (t *LineTable) parsePclnTab() {
 	}
 
 	var possibleVersion version
+	compressed := false
 
 	// The magic numbers are chosen such that reading the value with
 	// a different endianness does not result in the same value.
@@ -239,6 +242,10 @@ func (t *LineTable) parsePclnTab() {
 		t.binary, possibleVersion = binary.LittleEndian, ver120
 	case beMagic == abi.Go120PCLnTabMagic:
 		t.binary, possibleVersion = binary.BigEndian, ver120
+	case leMagic == abi.CompressedPCLnTabMagic:
+		t.binary, possibleVersion, compressed = binary.LittleEndian, ver120, true
+	case beMagic == abi.CompressedPCLnTabMagic:
+		t.binary, possibleVersion, compressed = binary.BigEndian, ver120, true
 	default:
 		return
 	}
@@ -274,6 +281,9 @@ func (t *LineTable) parsePclnTab() {
 		t.functab = data(7)
 		functabsize := (int(t.nfunctab)*2 + 1) * fieldsize
 		t.functab = t.functab[:functabsize]
+		if compressed && !t.inflateTables(offset) {
+			return
+		}
 	case ver116:
 		t.nfunctab = uint32(offset(0))
 		t.nfiletab = uint32(offset(1))
@@ -302,6 +312,35 @@ func (t *LineTable) parsePclnTab() {
 	}
 
 	t.version = possibleVersion
+}
+
+// inflateTables replaces the deflated tables of a pclntab that the linker
+// wrote with -compresspclntab with their contents. Keep in sync with
+// runtime/symtabcompressed.go:pcHeaderCompressed.
+func (t *LineTable) inflateTables(offset func(word uint32) uint64) bool {
+	zoff, zsize := offset(8), offset(9)
+	cuSize, nameSize, fileSize, lineSize := offset(10), offset(11), offset(12), offset(13)
+	base, pctabOff, pclnOff := offset(14), offset(6), offset(7)
+	size := uint64(len(t.Data))
+	total := cuSize + nameSize + fileSize + lineSize
+	if zoff > size || zsize > size-zoff || pctabOff > pclnOff || pclnOff > size ||
+		base > pclnOff-pctabOff || total < cuSize || total > 1<<32 {
+		return false
+	}
+	raw := make([]byte, total)
+	if _, err := io.ReadFull(flate.NewReader(bytes.NewReader(t.Data[zoff:zoff+zsize])), raw); err != nil {
+		return false
+	}
+	t.cutab = raw[:cuSize]
+	t.funcnametab = raw[cuSize : cuSize+nameSize]
+	t.filetab = raw[cuSize+nameSize : cuSize+nameSize+fileSize]
+	// The pc-file and pc-line tables take offsets from base, past the
+	// end of pctab.
+	pctab := make([]byte, base+lineSize)
+	copy(pctab, t.Data[pctabOff:pctabOff+base])
+	copy(pctab[base:], raw[total-lineSize:])
+	t.pctab = pctab
+	return true
 }
 
 // go12Funcs returns a slice of Funcs derived from the Go 1.2+ pcln table.

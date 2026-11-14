@@ -90,6 +90,10 @@ type Link struct {
 
 	compressDWARF bool
 
+	// compressPclntab deflates the function names, the file tables and the
+	// pc-file and pc-line tables, which the runtime inflates on first use.
+	compressPclntab bool
+
 	Libdir       []string
 	Library      []*sym.Library
 	LibraryByPkg map[string]*sym.Library
