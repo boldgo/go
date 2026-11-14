@@ -1540,6 +1540,11 @@ func isSystemGoroutine(gp *g, fixed bool) bool {
 		}
 		return !gp.runningCleanups.Load()
 	}
+	if f.datap.compressedTabs() {
+		// Every new goroutine asks this; answer without inflating the
+		// function names.
+		return f.flag&abi.FuncFlagRuntime != 0
+	}
 	return stringslite.HasPrefix(funcname(f), "runtime.")
 }
 

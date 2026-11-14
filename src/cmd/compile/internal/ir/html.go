@@ -554,25 +554,13 @@ func (h *HTMLWriter) dumpNodeHeaderHTML(n Node) {
 		}
 	}
 
-	v = reflect.ValueOf(n)
-	t = v.Type()
-	nm := t.NumMethod()
-	for i := 0; i < nm; i++ {
-		tm := t.Method(i)
-		if tm.PkgPath != "" {
-			continue
-		}
-		m := v.Method(i)
-		mt := m.Type()
-		if mt.NumIn() == 0 && mt.NumOut() == 1 && mt.Out(0).Kind() == reflect.Bool {
-			func() {
-				defer func() { recover() }()
-				if m.Call(nil)[0].Bool() {
-					name := strings.TrimSuffix(tm.Name, "_")
-					h.Printf(" %s", name)
-				}
-			}()
-		}
+	for _, g := range boolGetters {
+		func() {
+			defer func() { recover() }()
+			if g.get(n) {
+				h.Printf(" %s", g.name)
+			}
+		}()
 	}
 
 	if n.Op() == OCLOSURE {

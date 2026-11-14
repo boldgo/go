@@ -3134,13 +3134,11 @@ func (mux *ServeMux) registerErr(patstr string, handler Handler) error {
 		return fmt.Errorf("parsing %q: %w", patstr, err)
 	}
 
-	// Get the caller's location, for better conflict error messages.
-	// Skip register and whatever calls it.
-	_, file, line, ok := runtime.Caller(3)
-	if !ok {
-		pat.loc = "unknown location"
-	} else {
-		pat.loc = fmt.Sprintf("%s:%d", file, line)
+	// Record the caller, for better conflict error messages.
+	// Skip Callers, register and whatever calls it.
+	var pc [1]uintptr
+	if runtime.Callers(4, pc[:]) == 1 {
+		pat.pc = pc[0]
 	}
 
 	mux.mu.Lock()
@@ -3150,7 +3148,7 @@ func (mux *ServeMux) registerErr(patstr string, handler Handler) error {
 		if pat.conflictsWith(pat2) {
 			d := describeConflict(pat, pat2)
 			return fmt.Errorf("pattern %q (registered at %s) conflicts with pattern %q (registered at %s):\n%s",
-				pat, pat.loc, pat2, pat2.loc, d)
+				pat, pat.loc(), pat2, pat2.loc(), d)
 		}
 		return nil
 	}); err != nil {
@@ -3159,6 +3157,16 @@ func (mux *ServeMux) registerErr(patstr string, handler Handler) error {
 	mux.tree.addPattern(pat, handler)
 	mux.index.addPattern(pat)
 	return nil
+}
+
+// loc returns the source location of the call that registered p. It is
+// worked out only when needed, as finding a line can be costly.
+func (p *pattern) loc() string {
+	if p.pc == 0 {
+		return "unknown location"
+	}
+	f, _ := runtime.CallersFrames([]uintptr{p.pc}).Next()
+	return fmt.Sprintf("%s:%d", f.File, f.Line)
 }
 
 // Serve accepts incoming HTTP connections on the listener l,

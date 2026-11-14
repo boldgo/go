@@ -23,6 +23,11 @@ const (
 	// PCLnTabMagic value used in Go 1.20 and later.
 	// A ":" was added to generated symbol names (#37762).
 	Go120PCLnTabMagic PCLnTabMagic = 0xfffffff1
+	// CompressedPCLnTabMagic marks the Go 1.20 layout with the function
+	// names, the file tables and the pc-file and pc-line tables deflated
+	// into one stream, as the linker writes them under -compresspclntab.
+	// The header continues with the fields of runtime.pcHeaderCompressed.
+	CompressedPCLnTabMagic PCLnTabMagic = 0xfffffff2
 
 	// CurrentPCLnTabMagic is the value emitted by the current toolchain.
 	// This is written by the linker to the pcHeader and read by the
@@ -57,6 +62,11 @@ const (
 
 	// FuncFlagAsm indicates that a function was implemented in assembly.
 	FuncFlagAsm
+
+	// FuncFlagRuntime indicates a function whose name starts with
+	// "runtime.". The linker sets it only under -compresspclntab, where
+	// the runtime would otherwise inflate the function names to tell.
+	FuncFlagRuntime
 )
 
 // A FuncID identifies particular functions that need to be treated
