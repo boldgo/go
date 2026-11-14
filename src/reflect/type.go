@@ -551,6 +551,7 @@ func resolveTextOff(rtype unsafe.Pointer, off int32) unsafe.Pointer
 // addReflectOff adds a pointer to the reflection lookup map in the runtime.
 // It returns a new ID that can be used as a typeOff or textOff, and will
 // be resolved correctly. Implemented in the runtime package.
+// The runtime keeps ptr, so ptr escapes.
 //
 // addReflectOff should be an internal detail,
 // but widely used packages access it using linkname.
@@ -561,7 +562,6 @@ func resolveTextOff(rtype unsafe.Pointer, off int32) unsafe.Pointer
 // See go.dev/issue/67401.
 //
 //go:linkname addReflectOff
-//go:noescape
 func addReflectOff(ptr unsafe.Pointer) int32
 
 // resolveReflectName adds a name to the reflection lookup map in the runtime.
