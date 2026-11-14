@@ -15,6 +15,8 @@ import (
 // It minimizes memory copying. The zero value is ready to use.
 // Do not copy a non-zero Builder.
 type Builder struct {
+	shared sharedFlag // a string returned by String may use buf
+
 	addr *Builder // of receiver, to detect copies by value
 
 	// External users should never get direct access to this buffer, since
@@ -44,6 +46,10 @@ func (b *Builder) copyCheck() {
 
 // String returns the accumulated string.
 func (b *Builder) String() string {
+	if freesBuffers {
+		buf := b.stringBuf()
+		return unsafe.String(unsafe.SliceData(buf), len(buf))
+	}
 	return unsafe.String(unsafe.SliceData(b.buf), len(b.buf))
 }
 
@@ -64,9 +70,11 @@ func (b *Builder) Reset() {
 // grow copies the buffer to a new, larger buffer so that there are at least n
 // bytes of capacity beyond len(b.buf).
 func (b *Builder) grow(n int) {
+	old := b.buf
 	buf := bytealg.MakeNoZero(2*cap(b.buf) + n)[:len(b.buf)]
 	copy(buf, b.buf)
 	b.buf = buf
+	b.free(old)
 }
 
 // Grow grows b's capacity, if necessary, to guarantee space for
@@ -86,7 +94,11 @@ func (b *Builder) Grow(n int) {
 // Write always returns len(p), nil.
 func (b *Builder) Write(p []byte) (int, error) {
 	b.copyCheck()
-	b.buf = append(b.buf, p...)
+	if freesBuffers {
+		b.appendBytes(p)
+	} else {
+		b.buf = append(b.buf, p...)
+	}
 	return len(p), nil
 }
 
@@ -94,7 +106,11 @@ func (b *Builder) Write(p []byte) (int, error) {
 // The returned error is always nil.
 func (b *Builder) WriteByte(c byte) error {
 	b.copyCheck()
-	b.buf = append(b.buf, c)
+	if freesBuffers {
+		b.appendByte(c)
+	} else {
+		b.buf = append(b.buf, c)
+	}
 	return nil
 }
 
@@ -102,15 +118,20 @@ func (b *Builder) WriteByte(c byte) error {
 // It returns the number of bytes written and a nil error.
 func (b *Builder) WriteRune(r rune) (int, error) {
 	b.copyCheck()
-	n := len(b.buf)
+	old := b.buf
 	b.buf = utf8.AppendRune(b.buf, r)
-	return len(b.buf) - n, nil
+	b.release(old)
+	return len(b.buf) - len(old), nil
 }
 
 // WriteString appends the contents of s to b's buffer.
 // It returns the length of s and a nil error.
 func (b *Builder) WriteString(s string) (int, error) {
 	b.copyCheck()
-	b.buf = append(b.buf, s...)
+	if freesBuffers {
+		b.appendString(s)
+	} else {
+		b.buf = append(b.buf, s...)
+	}
 	return len(s), nil
 }
