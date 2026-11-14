@@ -31,7 +31,7 @@ type pattern struct {
 	// For example, the path "a/{$}" is represented as a literal segment "a" followed
 	// by a literal segment "/".
 	segments []segment
-	loc      string // source location of registering call, for helpful messages
+	pc       uintptr // of the registering call, for helpful messages; see loc
 }
 
 func (p *pattern) String() string { return p.str }
