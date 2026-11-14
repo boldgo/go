@@ -453,6 +453,7 @@ var passes = [...]ssa.Pass{
 		Disabled: !buildcfg.Experiment.PreemptibleLoops}, // insert resched checks in loops.
 	{Name: "cpufeatures", Fn: cpufeatures, Required: buildcfg.Experiment.SIMD, Disabled: !buildcfg.Experiment.SIMD},
 	{Name: "rewrite tern", Fn: rewriteTern, Required: false, Disabled: !buildcfg.Experiment.SIMD},
+	{Name: "alloc report", Fn: allocReport},
 	{Name: "lower", Fn: lower, Required: true},
 	{Name: "addressing modes", Fn: addressingModes, Required: false},
 	{Name: "late lower", Fn: lateLower, Required: true},
