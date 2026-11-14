@@ -931,6 +931,27 @@ func TestCgoNoCallback(t *testing.T) {
 	}
 }
 
+func TestCgoNonblocking(t *testing.T) {
+	if runtime.GOOS == "freebsd" && race.Enabled {
+		t.Skipf("race + cgo freebsd not supported. See https://go.dev/issue/73788.")
+	}
+	got := runTestProg(t, "testprogcgo", "CgoNonblocking")
+	if want := "OK\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+func TestCgoNonblockingCallback(t *testing.T) {
+	if runtime.GOOS == "freebsd" && race.Enabled {
+		t.Skipf("race + cgo freebsd not supported. See https://go.dev/issue/73788.")
+	}
+	got := runTestProg(t, "testprogcgo", "CgoNonblockingCallback")
+	want := "function marked with #cgo nonblocking called back into Go"
+	if !strings.Contains(got, want) {
+		t.Fatalf("did not see %q in output:\n%s", want, got)
+	}
+}
+
 func TestCgoNoEscape(t *testing.T) {
 	if asan.Enabled {
 		t.Skip("skipping test: ASAN forces extra heap allocations")

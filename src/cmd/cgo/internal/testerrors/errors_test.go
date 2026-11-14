@@ -181,8 +181,8 @@ func TestMallocCrashesOnNil(t *testing.T) {
 }
 
 func TestNotMatchedCFunction(t *testing.T) {
-	file := "notmatchedcfunction.go"
-	check(t, file)
+	check(t, "notmatchedcfunction.go")
+	check(t, "notmatchednonblocking.go")
 }
 
 func TestIncompatibleDeclarations(t *testing.T) {

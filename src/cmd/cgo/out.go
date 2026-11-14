@@ -672,7 +672,11 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 	if n.AddError {
 		prefix = "errno := "
 	}
-	fmt.Fprintf(fgo2, "\t%s_cgo_runtime_cgocall(%s, %s)\n", prefix, cname, arg)
+	call := "_cgo_runtime_cgocall"
+	if p.nonBlocking[n.C] {
+		call = "_cgo_runtime_cgocallnonblocking"
+	}
+	fmt.Fprintf(fgo2, "\t%s%s(%s, %s)\n", prefix, call, cname, arg)
 	if n.AddError {
 		fmt.Fprintf(fgo2, "\tif errno != 0 { r2 = syscall.Errno(errno) }\n")
 	}
@@ -683,8 +687,9 @@ func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
 	// Use _Cgo_keepalive instead of _Cgo_use when noescape & nocallback exist,
 	// so that the compiler won't force to escape them to heap.
 	// Instead, make the compiler keep them alive by using _Cgo_keepalive.
+	// A nonblocking function cannot call back either.
 	touchFunc := "_Cgo_use"
-	if p.noEscapes[n.C] && p.noCallbacks[n.C] {
+	if p.noEscapes[n.C] && (p.noCallbacks[n.C] || p.nonBlocking[n.C]) {
 		touchFunc = "_Cgo_keepalive"
 	}
 
@@ -795,9 +800,15 @@ func (p *Package) writeOutputFunc(fgcc *os.File, n *Name) {
 	if (n.Kind != "macro" && len(n.FuncType.Params) > 0) || tr != nil {
 		fmt.Fprintf(fgcc, "\t%s %v *_cgo_a = v;\n", ctype, p.packedAttribute())
 	}
+	// Only a callback into Go can move the Go stack that holds the
+	// argument frame, and only on a stack move does the result pointer
+	// need adjusting.
+	stackMoves := !p.noCallbacks[n.C] && !p.nonBlocking[n.C]
 	if tr != nil {
-		// Save the stack top for use below.
-		fmt.Fprintf(fgcc, "\tchar *_cgo_stktop = _cgo_topofstack();\n")
+		if stackMoves {
+			// Save the stack top for use below.
+			fmt.Fprintf(fgcc, "\tchar *_cgo_stktop = _cgo_topofstack();\n")
+		}
 		fmt.Fprintf(fgcc, "\t__typeof__(_cgo_a->r) _cgo_r;\n")
 	}
 	fmt.Fprintf(fgcc, "\t_cgo_tsan_acquire();\n")
@@ -828,9 +839,11 @@ func (p *Package) writeOutputFunc(fgcc *os.File, n *Name) {
 	}
 	fmt.Fprintf(fgcc, "\t_cgo_tsan_release();\n")
 	if tr != nil {
-		// The cgo call may have caused a stack copy (via a callback).
-		// Adjust the return value pointer appropriately.
-		fmt.Fprintf(fgcc, "\t_cgo_a = (void*)((char*)_cgo_a + (_cgo_topofstack() - _cgo_stktop));\n")
+		if stackMoves {
+			// The cgo call may have caused a stack copy (via a callback).
+			// Adjust the return value pointer appropriately.
+			fmt.Fprintf(fgcc, "\t_cgo_a = (void*)((char*)_cgo_a + (_cgo_topofstack() - _cgo_stktop));\n")
+		}
 		// Save the return value.
 		fmt.Fprintf(fgcc, "\t_cgo_a->r = _cgo_r;\n")
 		// The return value is on the Go stack. If we are using msan,
@@ -1732,6 +1745,9 @@ static const char *_GoStringPtr(_GoString_ s) { return s.p; }
 const goProlog = `
 //go:linkname _cgo_runtime_cgocall runtime.cgocall
 func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
+
+//go:linkname _cgo_runtime_cgocallnonblocking runtime.cgocallNonblocking
+func _cgo_runtime_cgocallnonblocking(unsafe.Pointer, uintptr) int32
 
 //go:linkname _cgoCheckPointer runtime.cgoCheckPointer
 //go:noescape

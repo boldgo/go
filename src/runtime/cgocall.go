@@ -314,6 +314,11 @@ func cgocallbackg(fn, frame unsafe.Pointer, ctxt uintptr) {
 		println("runtime: bad g in cgocallback")
 		exit(2)
 	}
+	if gp.m.incgoNonblock {
+		// The goroutine never entered a system call, so it cannot
+		// leave one to run the callback.
+		fatal("function marked with #cgo nonblocking called back into Go")
+	}
 
 	sp := gp.m.g0.sched.sp // system sp saved by cgocallback.
 	oldStack := gp.m.g0.stack
