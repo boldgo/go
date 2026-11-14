@@ -42,6 +42,8 @@ func TestCheckPtr(t *testing.T) {
 		{"CheckPtrSliceFail", "fatal error: checkptr: unsafe.Slice result straddles multiple allocations\n"},
 		{"CheckPtrStringOK", ""},
 		{"CheckPtrStringFail", "fatal error: checkptr: unsafe.String result straddles multiple allocations\n"},
+		{"CheckPtrSliceNilPtrPanics", ""},
+		{"CheckPtrStringNilPtrPanics", ""},
 	}
 
 	for _, tc := range testCases {

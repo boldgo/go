@@ -24,6 +24,8 @@ func init() {
 	register("CheckPtrStringOK", CheckPtrStringOK)
 	register("CheckPtrStringFail", CheckPtrStringFail)
 	register("CheckPtrAlignmentNested", CheckPtrAlignmentNested)
+	register("CheckPtrSliceNilPtrPanics", CheckPtrSliceNilPtrPanics)
+	register("CheckPtrStringNilPtrPanics", CheckPtrStringNilPtrPanics)
 }
 
 func CheckPtrAlignmentNoPtr() {
@@ -122,4 +124,22 @@ func CheckPtrAlignmentNested() {
 	p := unsafe.Pointer(&s[0])
 	n := 9
 	_ = ((*[10]int8)(unsafe.Pointer((*[10]int64)(unsafe.Pointer(&p)))))[:n:n]
+}
+
+// With checkptr, as without it, a bad unsafe.Slice or unsafe.String in user
+// code panics rather than throws.
+func CheckPtrSliceNilPtrPanics() {
+	defer mustRecover()
+	sink2 = unsafe.Slice((*int)(nil), 1)
+}
+
+func CheckPtrStringNilPtrPanics() {
+	defer mustRecover()
+	sink2 = unsafe.String(nil, 1)
+}
+
+func mustRecover() {
+	if recover() == nil {
+		println("no panic")
+	}
 }
