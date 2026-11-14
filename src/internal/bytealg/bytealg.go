@@ -132,10 +132,11 @@ func MakeNoZero(n int) []byte
 //go:noescape
 func Free(b []byte)
 
-// Grow returns a slice holding b's contents with room for n more bytes,
-// which must not fit in b's capacity. It grows b as append would, but
-// leaves the bytes past len(b) unset. If free is true, Grow frees b's
-// array as Free does, and the caller must own it.
+// Grow returns a slice holding *b's contents with room for n more bytes,
+// which must not fit in its capacity. It grows *b as append would, but
+// leaves the bytes past len(*b) unset. If free is true, Grow frees the old
+// array as Free does, and the caller must own it; Grow then empties *b
+// before the free, so that *b does not reach the array once it is freed.
 //
 //go:noescape
-func Grow(b []byte, n int, free bool) []byte
+func Grow(b *[]byte, n int, free bool) []byte

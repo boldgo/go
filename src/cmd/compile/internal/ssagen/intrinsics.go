@@ -215,18 +215,23 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	// Grow is an intrinsic for the same reason as Free: it is the slow path
 	// of strings.Builder's inlined writes. It grows by calling growslice,
 	// or growsliceNoAlias, which also frees the old array, when the caller
-	// allows freeing and the array is large enough.
+	// allows freeing and the array is large enough. Before a free it
+	// empties *b, which may be in the heap: a collection starting between
+	// the free and the caller's store of the new slice would otherwise
+	// still reach the freed array through it.
 	add("internal/bytealg", "Grow",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-			b, num, free := args[0], args[1], args[2]
+			dst, num, free := args[0], args[1], args[2]
+			bt := dst.Type.Elem()
 			intT := types.Types[types.TINT]
+			b := s.load(bt, dst)
 			p := s.newValue1(ssaop.OpSlicePtr, s.f.Config.Types.BytePtr, b)
 			l := s.newValue1(ssaop.OpSliceLen, intT, b)
 			c := s.newValue1(ssaop.OpSliceCap, intT, b)
 			newLen := s.newValue2(s.ssaOp(ir.OADD, intT), intT, l, num)
 			et := s.reflectType(types.Types[types.TUINT8])
 			grow := func(fn *obj.LSym) *ssa.Value {
-				return s.rtcall(fn, true, []*types.Type{n.Type()}, p, newLen, c, num, et)[0]
+				return s.rtcall(fn, true, []*types.Type{bt}, p, newLen, c, num, et)[0]
 			}
 			var r *ssa.Value
 			if !freegcEnabled {
@@ -242,17 +247,18 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 				bEntry.AddEdgeTo(bFree)
 				bEntry.AddEdgeTo(bKeep)
 				s.startBlock(bFree)
+				s.storeType(bt, dst, s.zeroVal(bt), 0, false)
 				s.vars[n] = grow(ir.Syms.GrowsliceNoAlias)
 				s.endBlock().AddEdgeTo(bNext)
 				s.startBlock(bKeep)
 				s.vars[n] = grow(ir.Syms.Growslice)
 				s.endBlock().AddEdgeTo(bNext)
 				s.startBlock(bNext)
-				r = s.variable(n, n.Type())
+				r = s.variable(n, bt)
 				delete(s.vars, n)
 			}
 			ptr := s.newValue1(ssaop.OpSlicePtr, s.f.Config.Types.BytePtr, r)
-			return s.newValue3(ssaop.OpSliceMake, n.Type(), ptr, l, s.newValue1(ssaop.OpSliceCap, intT, r))
+			return s.newValue3(ssaop.OpSliceMake, bt, ptr, l, s.newValue1(ssaop.OpSliceCap, intT, r))
 		},
 		all...)
 
