@@ -92,6 +92,7 @@ func (ctxt *Link) initImage() {
 		}
 		byName[s.Name] = syms[i]
 	}
+	var hashed map[string]loader.Sym
 	target := func(name string, text bool) loader.Sym {
 		if s, ok := byName[name]; ok && s != 0 {
 			return s
@@ -102,6 +103,20 @@ func (ctxt *Link) initImage() {
 			}
 		}
 		s := ldr.Lookup(name, 0)
+		if s == 0 && (strings.HasPrefix(name, "go:itab.") || strings.HasPrefix(name, "type:")) {
+			// Content-addressable symbols are not in the name table.
+			if hashed == nil {
+				hashed = map[string]loader.Sym{}
+				for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
+					if n := ldr.SymName(i); strings.HasPrefix(n, "go:itab.") || strings.HasPrefix(n, "type:") {
+						if _, ok := hashed[n]; !ok {
+							hashed[n] = i
+						}
+					}
+				}
+			}
+			s = hashed[name]
+		}
 		if s == 0 {
 			Exitf("init image: no symbol %s", name)
 		}
