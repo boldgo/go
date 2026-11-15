@@ -374,6 +374,9 @@ func Main(arch *sys.Arch, theArch Arch) {
 	bench.Start("loadlib")
 	ctxt.loadlib()
 
+	bench.Start("initimage")
+	ctxt.initImage()
+
 	bench.Start("inittasks")
 	ctxt.inittasks()
 

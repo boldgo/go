@@ -158,7 +158,7 @@ func (ctxt *Link) inittaskSym(rootNames []string, symName string) loader.Sym {
 		s := h.pop(ldr)
 
 		// Add s to the schedule.
-		if ldr.SymSize(s) > 8 {
+		if ldr.SymSize(s) > 8 && !imageTasks[s] {
 			// Note: don't add s if it has no functions to run. We need
 			// s during linking to compute an ordering, but the runtime
 			// doesn't need to know about it. About 1/2 of stdlib packages
