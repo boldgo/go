@@ -278,6 +278,8 @@ type Loader struct {
 
 	npkgsyms    int // number of package symbols, for accounting
 	nhashedsyms int // number of hashed symbols, for accounting
+
+	extItabs map[Sym]bool // external symbols that are itabs
 }
 
 const (
@@ -1272,10 +1274,18 @@ func (l *Loader) IsTypelink(i Sym) bool {
 // Returns whether this symbol is an itab symbol.
 func (l *Loader) IsItab(i Sym) bool {
 	if l.IsExternal(i) {
-		return false
+		return l.extItabs[i]
 	}
 	r, li := l.toLocal(i)
 	return r.Sym(li).IsItab()
+}
+
+// SetItab marks external symbol i as an itab.
+func (l *Loader) SetItab(i Sym) {
+	if l.extItabs == nil {
+		l.extItabs = map[Sym]bool{}
+	}
+	l.extItabs[i] = true
 }
 
 // Returns whether this symbol is a dictionary symbol.
