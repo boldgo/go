@@ -7,12 +7,14 @@ package ld
 import (
 	"cmd/internal/obj"
 	"cmd/internal/objabi"
+	"cmd/internal/src"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
 	"encoding/json"
 	"internal/abi"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -28,22 +30,39 @@ type initImage struct {
 		Path  string
 		XVars []string
 	}
-	Syms []struct {
-		Name   string
-		Global bool
-		Size   int64
-		Data   []byte
-		Ptrs   []int64 // a new object's pointer words, by its type
-		Relocs []struct {
-			Off  int64
+	Syms []imageSym
+}
+
+type imageSym struct {
+	Name   string
+	Global bool
+	Size   int64
+	Data   []byte
+	Ptrs   []int64 // a new object's pointer words, by its type
+	Relocs []imageReloc
+	RO     bool
+	Align  int32 // a new object's, 8 if 0
+	// Closure, if set, makes the symbol a closure, of the function
+	// literal at a position in a package (its symbol prefix), the
+	// variables of which are in cells: the ones it captures by reference
+	// point to them, the others copy them.
+	Closure *struct {
+		Pkg, File string
+		Line, Col int
+		Vars      []struct {
+			Name string
 			Sym  string
-			Add  int64
-			Text bool
-			Kind string
+			Off  int64
 		}
-		RO    bool
-		Align int32 // a new object's, 8 if 0
 	}
+}
+
+type imageReloc struct {
+	Off  int64
+	Sym  string
+	Add  int64
+	Text bool
+	Kind string
 }
 
 var (
@@ -78,7 +97,7 @@ func (ctxt *Link) initImage() {
 		}
 	}
 	syms := make([]loader.Sym, len(img.Syms))
-	byName := map[string]loader.Sym{}
+	byName := ctxt.imageClosures(img.Syms)
 	// Read-only objects without pointers, such as strings, share the
 	// program's string data, or each other's, when their contents and
 	// alignment match.
@@ -284,4 +303,149 @@ func (ctxt *Link) synthItab(name string, types map[string]loader.Sym) loader.Sym
 	sb.SetAlign(int32(arch.PtrSize))
 	ldr.SetItab(s)
 	return s
+}
+
+type closureVar struct {
+	name      string
+	byval     bool
+	off, size int64
+}
+
+type funcLit struct {
+	name string
+	sym  loader.Sym
+	size int64
+	vars []closureVar
+}
+
+type funcLitKey struct {
+	pkg, file string
+	line, col uint
+}
+
+// imageClosures lays out the image's closures as the compiler does. It
+// returns the functions they refer to by name.
+func (ctxt *Link) imageClosures(syms []imageSym) map[string]loader.Sym {
+	funcs := map[string]loader.Sym{}
+	var lits map[funcLitKey]*funcLit
+	var byName map[string]*imageSym
+	for i := range syms {
+		s := &syms[i]
+		c := s.Closure
+		if c == nil {
+			continue
+		}
+		if lits == nil {
+			lits = ctxt.funcLits()
+			byName = map[string]*imageSym{}
+			for j := range syms {
+				byName[syms[j].Name] = &syms[j]
+			}
+		}
+		// The compiler's positions saturate.
+		p := src.MakePos(nil, uint(c.Line), uint(c.Col))
+		lit, ok := lits[funcLitKey{c.Pkg, c.File, p.Line(), p.Col()}]
+		switch {
+		case !ok:
+			Exitf("init image: no function literal at %s:%d:%d in %s", c.File, c.Line, c.Col, c.Pkg)
+		case lit == nil:
+			Exitf("init image: function literals share %s:%d:%d in %s", c.File, c.Line, c.Col, c.Pkg)
+		case len(lit.vars) != len(c.Vars):
+			Exitf("init image: %s captures %d variables, the image %d", lit.name, len(lit.vars), len(c.Vars))
+		}
+		funcs[lit.name] = lit.sym
+		s.Size = lit.size
+		s.Data = make([]byte, lit.size)
+		s.Relocs = []imageReloc{{Sym: lit.name, Text: true}}
+		s.RO = true
+		s.Align = int32(ctxt.Arch.PtrSize)
+		for _, v := range c.Vars {
+			k := slices.IndexFunc(lit.vars, func(cv closureVar) bool { return cv.name == v.Name })
+			if k < 0 {
+				Exitf("init image: %s does not capture %s", lit.name, v.Name)
+			}
+			cv := lit.vars[k]
+			if !cv.byval {
+				s.Relocs = append(s.Relocs, imageReloc{Off: cv.off, Sym: v.Sym, Add: v.Off})
+				continue
+			}
+			cell := byName[v.Sym]
+			end := v.Off + cv.size
+			if cell == nil || cell.Closure != nil || end > cell.Size {
+				Exitf("init image: %s captures %s by value, which the image does not hold", lit.name, v.Name)
+			}
+			if v.Off < int64(len(cell.Data)) {
+				copy(s.Data[cv.off:cv.off+cv.size], cell.Data[v.Off:min(end, int64(len(cell.Data)))])
+			}
+			for _, r := range cell.Relocs {
+				if v.Off <= r.Off && r.Off < end {
+					r.Off += cv.off - v.Off
+					s.Relocs = append(s.Relocs, r)
+				}
+			}
+		}
+	}
+	return funcs
+}
+
+// funcLits reads the descriptions of the program's function literals
+// (cmd/compile/internal/gc/closureinfo.go) and indexes them by position.
+// Generic ones are left out. The functions are content addressable: an
+// R_KEEP relocation, not their name, finds them.
+func (ctxt *Link) funcLits() map[funcLitKey]*funcLit {
+	ldr := ctxt.loader
+	lits := map[funcLitKey]*funcLit{}
+	for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
+		name := ldr.SymName(i)
+		pkg, ok := strings.CutSuffix(name, "..closureinfo")
+		if !ok {
+			continue
+		}
+		at := map[int32]loader.Sym{}
+		relocs := ldr.Relocs(i)
+		for k := range relocs.Count() {
+			if r := relocs.At(k); r.Type() == objabi.R_KEEP {
+				at[r.Off()] = r.Sym()
+			}
+		}
+		off := int32(0)
+		for _, line := range strings.Split(string(ldr.Data(i)), "\n") {
+			start := off
+			off += int32(len(line)) + 1
+			if line == "" {
+				continue
+			}
+			num := func(s string) int64 {
+				n, err := strconv.ParseInt(s, 10, 64)
+				if err != nil {
+					Exitf("init image: %s: %q: %v", name, line, err)
+				}
+				return n
+			}
+			f := strings.Split(line, "\t")
+			if len(f) < 5 {
+				Exitf("init image: %s: %q", name, line)
+			}
+			if strings.Contains(f[0], "[") {
+				continue
+			}
+			lit := &funcLit{name: f[0], sym: at[start], size: num(f[4])}
+			if lit.sym == 0 {
+				Exitf("init image: %s: no function at %d", name, start)
+			}
+			for _, v := range f[5:] {
+				p := strings.Split(v, ":")
+				if len(p) != 4 {
+					Exitf("init image: %s: %q", name, line)
+				}
+				lit.vars = append(lit.vars, closureVar{name: p[0], byval: p[1] == "true", off: num(p[2]), size: num(p[3])})
+			}
+			k := funcLitKey{pkg, f[1], uint(num(f[2])), uint(num(f[3]))}
+			if _, dup := lits[k]; dup {
+				lit = nil
+			}
+			lits[k] = lit
+		}
+	}
+	return lits
 }

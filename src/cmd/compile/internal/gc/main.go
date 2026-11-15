@@ -297,6 +297,7 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	// because large values may contain pointers, it must happen early.
 	base.Timer.Start("fe", "escapes")
 	escape.Funcs(typecheck.Target.Funcs)
+	recordClosures()
 
 	rewriteresults.Funcs(typecheck.Target.Funcs)
 
@@ -395,6 +396,7 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	if base.Debug.WrapGlobalMapCtl != 1 {
 		staticinit.AddKeepRelocations()
 	}
+	dumpClosureInfo()
 
 	if exportLate {
 		base.Timer.Start("be", "dumpexport")
