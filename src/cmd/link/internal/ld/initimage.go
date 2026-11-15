@@ -78,7 +78,29 @@ func (ctxt *Link) initImage() {
 	}
 	syms := make([]loader.Sym, len(img.Syms))
 	byName := map[string]loader.Sym{}
+	// Read-only objects without pointers, such as strings, share the
+	// program's string data when their contents match.
+	var consts map[string]loader.Sym
 	for i, s := range img.Syms {
+		if s.RO && len(s.Relocs) == 0 {
+			if consts == nil {
+				consts = map[string]loader.Sym{}
+				for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
+					if strings.HasPrefix(ldr.SymName(i), "go:string.") {
+						consts[string(ldr.Data(i))] = i
+					}
+				}
+			}
+			d := string(s.Data) + strings.Repeat("\x00", int(s.Size)-len(s.Data))
+			if c, ok := consts[d]; ok {
+				byName[s.Name] = c
+				continue
+			}
+			syms[i] = ldr.CreateStaticSym(s.Name)
+			consts[d] = syms[i]
+			byName[s.Name] = syms[i]
+			continue
+		}
 		if s.Global {
 			g := ldr.Lookup(s.Name, 0)
 			if g == 0 {
