@@ -101,6 +101,22 @@ func TestStaticHash(t *testing.T) {
 
 type bigKey [130]byte
 
+type strKey struct {
+	A string
+	B uint64
+}
+
+type paddedKey struct {
+	X int8
+	Y int64
+}
+
+type blankKey struct {
+	A string
+	_ int32
+	B int8
+}
+
 func itoa(i int) string { return fmt.Sprint(i) }
 
 func TestStaticMap(t *testing.T) {
@@ -139,9 +155,39 @@ func TestStaticMap(t *testing.T) {
 	t.Run("uintptr-string", func(t *testing.T) {
 		testStatic(t, 20, func(i int) uintptr { return uintptr(i) << 20 }, itoa)
 	})
+	t.Run("struct-int", func(t *testing.T) {
+		testStatic(t, 300, func(i int) strKey { return strKey{itoa(i % 17), uint64(i)} }, func(i int) int { return i })
+	})
+	t.Run("padded-int", func(t *testing.T) {
+		testStatic(t, 100, func(i int) paddedKey { return paddedKey{int8(i), int64(i) << 40} }, itoa)
+	})
+	t.Run("blank-int", func(t *testing.T) {
+		testStatic(t, 100, func(i int) blankKey { return blankKey{A: itoa(i)} }, func(i int) int { return i })
+	})
+	t.Run("wrapped-int", func(t *testing.T) {
+		testStatic(t, 100, func(i int) struct{ S [1]string } { return struct{ S [1]string }{[1]string{itoa(i)}} }, func(i int) int { return i })
+	})
+	t.Run("strarray-int", func(t *testing.T) {
+		testStatic(t, 100, func(i int) [2]string { return [2]string{itoa(i), itoa(-i)} }, func(i int) int { return i })
+	})
 	t.Run("bool-int", func(t *testing.T) {
 		testStatic(t, 1, func(i int) bool { return i != 0 }, func(i int) int { return i + 1 })
 	})
+}
+
+func TestStaticMapBlankField(t *testing.T) {
+	src := map[blankKey]int{}
+	for i := range 50 {
+		src[blankKey{A: itoa(i), B: int8(i)}] = i
+	}
+	m := maps.NewStaticMap(src)
+	for i := range 50 {
+		k := blankKey{A: itoa(i), B: int8(i)}
+		*(*int32)(unsafe.Add(unsafe.Pointer(&k), unsafe.Sizeof(""))) = int32(i + 1)
+		if v, ok := m[k]; !ok || v != i {
+			t.Fatalf("m[%v] with its blank field set = %v, %v", k, v, ok)
+		}
+	}
 }
 
 // testStatic checks a static map of n entries, key(i) to val(i), against

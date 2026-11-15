@@ -20,9 +20,9 @@ import (
 // writing, so ordinary maps pay nothing for this.
 //
 // The table's hash, staticHash, has fixed keys. The table's keys are fixed
-// when the program is linked, so no input can lengthen its probes. Only
-// string keys and keys compared as plain memory are static, and staticHash
-// hashes their bytes.
+// when the program is linked, so no input can lengthen its probes. Static
+// keys are made of strings, integers and bools: staticTypeHash hashes
+// their bytes.
 
 const staticWriting = 0x80
 
@@ -132,10 +132,42 @@ func staticHashStr(k string) uint64 {
 }
 
 func staticKeyHash(typ *abi.MapType, key unsafe.Pointer) uint64 {
-	if typ.Key.Kind() == abi.String {
-		return staticHashStr(*(*string)(key))
+	return staticTypeHash(typ.Key, key)
+}
+
+// staticTypeHash hashes the value of type t at p: as plain memory if t is
+// plain memory, and otherwise by its strings' bytes and the hashes of its
+// fields or elements, skipping blank fields as == does. A struct of one
+// field and an array of one element hash as that field or element, as the
+// compiler's choice of map functions treats them.
+func staticTypeHash(t *abi.Type, p unsafe.Pointer) uint64 {
+	if t.TFlag&abi.TFlagRegularMemory != 0 {
+		return staticHash(p, t.Size_)
 	}
-	return staticHash(key, typ.Key.Size_)
+	h := uint64(staticKey2)
+	switch t.Kind() {
+	case abi.String:
+		return staticHashStr(*(*string)(p))
+	case abi.Struct:
+		fs := (*abi.StructType)(unsafe.Pointer(t)).Fields
+		if len(fs) == 1 && !fs[0].Name.IsBlank() {
+			return staticTypeHash(fs[0].Typ, p)
+		}
+		for _, f := range fs {
+			if !f.Name.IsBlank() {
+				h = staticMix(h^staticKey1, staticTypeHash(f.Typ, unsafe.Add(p, f.Offset))^staticKey3)
+			}
+		}
+	case abi.Array:
+		at := (*abi.ArrayType)(unsafe.Pointer(t))
+		if at.Len == 1 {
+			return staticTypeHash(at.Elem, p)
+		}
+		for i := range at.Len {
+			h = staticMix(h^staticKey1, staticTypeHash(at.Elem, unsafe.Add(p, i*at.Elem.Size_))^staticKey3)
+		}
+	}
+	return h
 }
 
 // bucket returns the entries of h's bucket.
