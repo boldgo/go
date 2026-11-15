@@ -93,6 +93,7 @@ func (ctxt *Link) initImage() {
 		byName[s.Name] = syms[i]
 	}
 	var hashed map[string]loader.Sym
+	missing := map[string]bool{}
 	target := func(name string, text bool) loader.Sym {
 		if s, ok := byName[name]; ok && s != 0 {
 			return s
@@ -118,7 +119,7 @@ func (ctxt *Link) initImage() {
 			s = hashed[name]
 		}
 		if s == 0 {
-			Exitf("init image: no symbol %s", name)
+			missing[name] = true
 		}
 		return s
 	}
@@ -142,7 +143,9 @@ func (ctxt *Link) initImage() {
 		}
 		sb.SetReadOnly(false)
 		for _, r := range s.Relocs {
-			sb.SetAddrPlus(ctxt.Arch, r.Off, target(r.Sym, r.Text), r.Add)
+			if t := target(r.Sym, r.Text); t != 0 {
+				sb.SetAddrPlus(ctxt.Arch, r.Off, t, r.Add)
+			}
 		}
 		if s.Global {
 			continue
@@ -153,6 +156,14 @@ func (ctxt *Link) initImage() {
 			slices.Sort(s.Ptrs)
 			imageMasks[syms[i]] = s.Ptrs
 		}
+	}
+	if len(missing) > 0 {
+		var names []string
+		for n := range missing {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		Exitf("init image: no symbols %s", strings.Join(names, " "))
 	}
 	for _, p := range img.Packages {
 		if t := ldr.Lookup(objabi.PathToPrefix(p.Path)+"..inittask", 0); t != 0 {
