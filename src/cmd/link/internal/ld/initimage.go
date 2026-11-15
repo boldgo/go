@@ -194,12 +194,13 @@ func (ctxt *Link) initImage() {
 		sb.SetSize(s.Size)
 		switch t := sb.Type(); {
 		case s.Global:
-			// A global the type of which has pointers stays where the
-			// collector scans it by its type, for the pointers the
-			// program stores in it later.
-			if t == sym.SNOPTRBSS || t == sym.SNOPTRDATA {
+			// A global stays in its section, FIPS or not, scanned or not
+			// by its type, for the pointers the program stores in it
+			// later; it has contents now.
+			switch t {
+			case sym.SNOPTRBSS:
 				sb.SetType(sym.SNOPTRDATA)
-			} else {
+			case sym.SBSS:
 				sb.SetType(sym.SDATA)
 			}
 		case s.RO:
