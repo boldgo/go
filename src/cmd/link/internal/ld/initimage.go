@@ -41,7 +41,8 @@ type initImage struct {
 			Text bool
 			Kind string
 		}
-		RO bool
+		RO    bool
+		Align int32 // a new object's, 8 if 0
 	}
 }
 
@@ -79,25 +80,34 @@ func (ctxt *Link) initImage() {
 	syms := make([]loader.Sym, len(img.Syms))
 	byName := map[string]loader.Sym{}
 	// Read-only objects without pointers, such as strings, share the
-	// program's string data when their contents match.
-	var consts map[string]loader.Sym
+	// program's string data, or each other's, when their contents and
+	// alignment match.
+	type constKey struct {
+		data  string
+		align int32
+	}
+	var consts map[constKey]loader.Sym
 	for i, s := range img.Syms {
+		if s.Align == 0 {
+			img.Syms[i].Align = 8
+			s.Align = 8
+		}
 		if s.RO && len(s.Relocs) == 0 {
 			if consts == nil {
-				consts = map[string]loader.Sym{}
+				consts = map[constKey]loader.Sym{}
 				for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
 					if strings.HasPrefix(ldr.SymName(i), "go:string.") {
-						consts[string(ldr.Data(i))] = i
+						consts[constKey{string(ldr.Data(i)), 1}] = i
 					}
 				}
 			}
-			d := string(s.Data) + strings.Repeat("\x00", int(s.Size)-len(s.Data))
-			if c, ok := consts[d]; ok {
+			k := constKey{string(s.Data) + strings.Repeat("\x00", int(s.Size)-len(s.Data)), s.Align}
+			if c, ok := consts[k]; ok {
 				byName[s.Name] = c
 				continue
 			}
 			syms[i] = ldr.CreateStaticSym(s.Name)
-			consts[d] = syms[i]
+			consts[k] = syms[i]
 			byName[s.Name] = syms[i]
 			continue
 		}
@@ -186,7 +196,7 @@ func (ctxt *Link) initImage() {
 		if s.Global {
 			continue
 		}
-		sb.SetAlign(8)
+		sb.SetAlign(s.Align)
 		ldr.SetAttrLocal(syms[i], true)
 		if !s.RO && len(s.Ptrs) > 0 {
 			slices.Sort(s.Ptrs)
