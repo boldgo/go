@@ -45,7 +45,9 @@ type imageSym struct {
 	// Closure, if set, makes the symbol a closure, of the function
 	// literal at a position in a package (its symbol prefix), the
 	// variables of which are in cells: the ones it captures by reference
-	// point to them, the others copy them.
+	// point to them, the others copy them. A function literal in an
+	// instance of a generic function also has the instance's shapes,
+	// which its code is for, and dictionary.
 	Closure *struct {
 		Pkg, File string
 		Line, Col int
@@ -54,6 +56,8 @@ type imageSym struct {
 			Sym  string
 			Off  int64
 		}
+		Shapes string
+		Dict   string
 	}
 }
 
@@ -321,6 +325,7 @@ type funcLit struct {
 type funcLitKey struct {
 	pkg, file string
 	line, col uint
+	shapes    string
 }
 
 // imageClosures lays out the image's closures as the compiler does. It
@@ -344,14 +349,16 @@ func (ctxt *Link) imageClosures(syms []imageSym) map[string]loader.Sym {
 		}
 		// The compiler's positions saturate.
 		p := src.MakePos(nil, uint(c.Line), uint(c.Col))
-		lit, ok := lits[funcLitKey{c.Pkg, c.File, p.Line(), p.Col()}]
+		lit, ok := lits[funcLitKey{c.Pkg, c.File, p.Line(), p.Col(), c.Shapes}]
 		switch {
 		case !ok:
 			Exitf("init image: no function literal at %s:%d:%d in %s", c.File, c.Line, c.Col, c.Pkg)
 		case lit == nil:
 			Exitf("init image: function literals share %s:%d:%d in %s", c.File, c.Line, c.Col, c.Pkg)
-		case len(lit.vars) != len(c.Vars):
-			Exitf("init image: %s captures %d variables, the image %d", lit.name, len(lit.vars), len(c.Vars))
+		}
+		dict := slices.IndexFunc(lit.vars, func(cv closureVar) bool { return cv.name == ".dict" })
+		if n := len(c.Vars) + min(dict+1, 1); n != len(lit.vars) {
+			Exitf("init image: %s captures %d variables, the image %d", lit.name, len(lit.vars), n)
 		}
 		funcs[lit.name] = lit.sym
 		s.Size = lit.size
@@ -359,6 +366,12 @@ func (ctxt *Link) imageClosures(syms []imageSym) map[string]loader.Sym {
 		s.Relocs = []imageReloc{{Sym: lit.name, Text: true}}
 		s.RO = true
 		s.Align = int32(ctxt.Arch.PtrSize)
+		if dict >= 0 {
+			if cv := lit.vars[dict]; !cv.byval || c.Dict == "" {
+				Exitf("init image: %s has no dictionary", lit.name)
+			}
+			s.Relocs = append(s.Relocs, imageReloc{Off: lit.vars[dict].off, Sym: c.Dict})
+		}
 		for _, v := range c.Vars {
 			k := slices.IndexFunc(lit.vars, func(cv closureVar) bool { return cv.name == v.Name })
 			if k < 0 {
@@ -389,16 +402,18 @@ func (ctxt *Link) imageClosures(syms []imageSym) map[string]loader.Sym {
 }
 
 // funcLits reads the descriptions of the program's function literals
-// (cmd/compile/internal/gc/closureinfo.go) and indexes them by position.
-// Generic ones are left out. The functions are content addressable: an
-// R_KEEP relocation, not their name, finds them.
+// (cmd/compile/internal/gc/closureinfo.go) and indexes them by the
+// package they are in, their position and, for those in instances of
+// generic functions, the instance's shapes, which the package that
+// instantiates it has the code for. Those in methods of generic types are
+// left out. The functions are content addressable: an R_KEEP relocation,
+// not their name, finds them.
 func (ctxt *Link) funcLits() map[funcLitKey]*funcLit {
 	ldr := ctxt.loader
 	lits := map[funcLitKey]*funcLit{}
 	for i := loader.Sym(1); i < loader.Sym(ldr.NSym()); i++ {
 		name := ldr.SymName(i)
-		pkg, ok := strings.CutSuffix(name, "..closureinfo")
-		if !ok {
+		if !strings.HasSuffix(name, "..closureinfo") {
 			continue
 		}
 		at := map[int32]loader.Sym{}
@@ -426,7 +441,8 @@ func (ctxt *Link) funcLits() map[funcLitKey]*funcLit {
 			if len(f) < 5 {
 				Exitf("init image: %s: %q", name, line)
 			}
-			if strings.Contains(f[0], "[") {
+			pkg, shapes, ok := funcLitOf(f[0])
+			if !ok {
 				continue
 			}
 			lit := &funcLit{name: f[0], sym: at[start], size: num(f[4])}
@@ -440,12 +456,48 @@ func (ctxt *Link) funcLits() map[funcLitKey]*funcLit {
 				}
 				lit.vars = append(lit.vars, closureVar{name: p[0], byval: p[1] == "true", off: num(p[2]), size: num(p[3])})
 			}
-			k := funcLitKey{pkg, f[1], uint(num(f[2])), uint(num(f[3]))}
-			if _, dup := lits[k]; dup {
+			k := funcLitKey{pkg, f[1], uint(num(f[2])), uint(num(f[3])), shapes}
+			if l, dup := lits[k]; dup && (l == nil || l.name != lit.name) {
 				lit = nil
+			} else if dup {
+				continue
 			}
 			lits[k] = lit
 		}
 	}
 	return lits
+}
+
+// funcLitOf returns the package of the function literal that has symbol
+// name and, if it is in an instance of a generic function, the instance's
+// shapes. It reports false for one in a method of a generic type.
+func funcLitOf(name string) (pkg, shapes string, ok bool) {
+	base, inst, generic := strings.Cut(name, "[")
+	pkg = base
+	if i := strings.LastIndexByte(pkg, '/'); i >= 0 {
+		pkg = pkg[i:]
+	}
+	dot := strings.IndexByte(pkg, '.')
+	if dot < 0 {
+		return "", "", false
+	}
+	pkg = base[:len(base)-len(pkg)+dot]
+	if !generic {
+		return pkg, "", true
+	}
+	if strings.Contains(base, "(") {
+		return "", "", false
+	}
+	depth := 1
+	for i := range len(inst) {
+		switch inst[i] {
+		case '[':
+			depth++
+		case ']':
+			if depth--; depth == 0 {
+				return pkg, inst[:i], true
+			}
+		}
+	}
+	return "", "", false
 }

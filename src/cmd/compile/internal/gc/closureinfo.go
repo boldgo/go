@@ -66,7 +66,7 @@ func dumpClosureInfo() {
 	var b strings.Builder
 	var rels []obj.Reloc
 	for _, l := range funcLits {
-		if s := l.fn.Linksym(); s.Type == objabi.STEXT {
+		if s := l.fn.Linksym(); s.Type.IsText() {
 			rels = append(rels, obj.Reloc{Type: objabi.R_KEEP, Off: int32(b.Len()), Sym: s})
 			b.WriteString(l.desc)
 			b.WriteByte('\n')
