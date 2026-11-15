@@ -33,7 +33,7 @@ type initImage struct {
 		Global bool
 		Size   int64
 		Data   []byte
-		Ptrs   []int64
+		Ptrs   []int64 // a new object's pointer words, by its type
 		Relocs []struct {
 			Off  int64
 			Sym  string
@@ -169,7 +169,16 @@ func (ctxt *Link) initImage() {
 		copy(d, s.Data)
 		sb.SetData(d)
 		sb.SetSize(s.Size)
-		switch {
+		switch t := sb.Type(); {
+		case s.Global:
+			// A global the type of which has pointers stays where the
+			// collector scans it by its type, for the pointers the
+			// program stores in it later.
+			if t == sym.SNOPTRBSS || t == sym.SNOPTRDATA {
+				sb.SetType(sym.SNOPTRDATA)
+			} else {
+				sb.SetType(sym.SDATA)
+			}
 		case s.RO:
 			sb.SetType(sym.SRODATA)
 		case len(s.Ptrs) > 0:
