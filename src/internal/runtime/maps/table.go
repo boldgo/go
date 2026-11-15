@@ -745,6 +745,11 @@ func (it *Iter) Init(typ *abi.MapType, m *Map) {
 		return
 	}
 
+	if m.writing == staticWriting {
+		it.initStatic(m)
+		return
+	}
+
 	dirIdx := 0
 	var groupSmall groupReference
 	if m.dirLen <= 0 {
@@ -878,12 +883,17 @@ func (it *Iter) Next() {
 		return
 	}
 
-	if it.m.writing != 0 {
+	if w := it.m.writing; w != 0 && w != staticWriting {
 		fatal("concurrent map iteration and map write")
 		return
 	}
 
 	if it.dirIdx < 0 {
+		if it.dirIdx == staticIter {
+			it.nextStatic()
+			return
+		}
+
 		// Map was small at Init.
 		for ; it.entryIdx < abi.MapGroupSlots; it.entryIdx++ {
 			k := uintptr(it.entryIdx+it.entryOffset) % abi.MapGroupSlots

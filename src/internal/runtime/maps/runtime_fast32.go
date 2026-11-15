@@ -31,8 +31,7 @@ func runtime_mapaccess2_fast32(typ *abi.MapType, m *Map, key uint32) (unsafe.Poi
 	}
 
 	if m.writing != 0 {
-		fatal("concurrent map read and map write")
-		return nil, false
+		return m.staticGet32(typ, key)
 	}
 
 	if m.dirLen == 0 {
@@ -194,7 +193,7 @@ func runtime_mapassign_fast32(typ *abi.MapType, m *Map, key uint32) unsafe.Point
 		race.WritePC(unsafe.Pointer(m), callerpc, pc)
 	}
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstatic(typ)
 	}
 
 	var hash uintptr
@@ -343,7 +342,7 @@ func runtime_mapassign_fast32ptr(typ *abi.MapType, m *Map, key unsafe.Pointer) u
 		race.WritePC(unsafe.Pointer(m), callerpc, pc)
 	}
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstatic(typ)
 	}
 
 	var hash uintptr
