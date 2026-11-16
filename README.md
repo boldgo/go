@@ -6,10 +6,11 @@
 BoldGo is a fork of Go for smaller, faster binaries. It tries ideas out
 before mainstream Go gets there, so use it at your own risk.
 
-**Versions.** BoldGo 1.27.y is based on Go 1.27 and compatible with it: the
-same language and the same standard library APIs as every Go 1.27.x. Only the
-last number is BoldGo's own; it counts BoldGo releases and does not track Go's
-patch releases.
+**Versions.** BoldGo versions are MAJOR.MINOR.PATCH, as in semantic
+versioning. MAJOR.MINOR is the Go release BoldGo is based on, and BoldGo is
+compatible with it: the same language and the same standard library APIs.
+PATCH is BoldGo's own and independent of Go's patch releases: BoldGo 1.27.3
+is based on Go 1.27, not on Go 1.27.3.
 
 Go is an open source programming language that makes it easy to build simple,
 reliable, and efficient software. Its canonical Git repository is located at
