@@ -449,6 +449,7 @@ func Main(arch *sys.Arch, theArch Arch) {
 	ctxt.dodata(symGroupType)
 	bench.Start("address")
 	order := ctxt.address()
+	ctxt.dumpSizes()
 	bench.Start("dwarfcompress")
 	dwarfcompress(ctxt)
 	bench.Start("layout")

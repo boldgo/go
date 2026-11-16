@@ -502,3 +502,36 @@ func funcLitOf(name string) (pkg, shapes string, ok bool) {
 	}
 	return "", "", false
 }
+
+// dumpSizes writes, if $GOLINK_SYMSIZES names a file, a line for each
+// symbol the link keeps: its name, size, kind, package and address,
+// tab-separated. Comparing the lines of two links tells what an init
+// image costs or saves for each package, static data the symbol table
+// leaves out too, and the addresses show the padding between symbols.
+func (ctxt *Link) dumpSizes() {
+	file := os.Getenv("GOLINK_SYMSIZES")
+	if file == "" {
+		return
+	}
+	ldr := ctxt.loader
+	var b strings.Builder
+	for s := loader.Sym(1); s < loader.Sym(ldr.NSym()); s++ {
+		// A container's size is its members'.
+		if !ldr.AttrReachable(s) || ldr.SymSize(s) == 0 || ldr.OuterSym(s) == 0 && ldr.SubSym(s) != 0 {
+			continue
+		}
+		b.WriteString(ldr.SymName(s))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatInt(ldr.SymSize(s), 10))
+		b.WriteByte('\t')
+		b.WriteString(ldr.SymType(s).String())
+		b.WriteByte('\t')
+		b.WriteString(ldr.SymPkg(s))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatInt(ldr.SymValue(s), 10))
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(file, []byte(b.String()), 0o666); err != nil {
+		Exitf("%v", err)
+	}
+}
