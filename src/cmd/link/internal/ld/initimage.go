@@ -129,7 +129,12 @@ func (ctxt *Link) initImage() {
 				byName[s.Name] = c
 				continue
 			}
-			syms[i] = ldr.CreateStaticSym(s.Name)
+			name := s.Name
+			if s.Align == 1 {
+				// Strings go with the program's, packed.
+				name = "go:string." + name
+			}
+			syms[i] = ldr.CreateStaticSym(name)
 			consts[k] = syms[i]
 			byName[s.Name] = syms[i]
 			continue
