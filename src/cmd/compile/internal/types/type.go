@@ -234,8 +234,8 @@ const (
 	// typeIsFullyInstantiated reports whether a type is fully instantiated generic type; i.e.
 	// an instantiated generic type where all type arguments are non-generic or fully instantiated generic types.
 	typeIsFullyInstantiated
-	typeIsSIMDTag // type is the SIMD marker type
-	typeIsSIMD    // type contains the SIMD marker type
+	typeIsSIMDTag // type is a SIMD marker (tag) type
+	typeIsSIMD    // type is a SIMD type: a SIMD vector or mask
 	typeMethodsComputed
 )
 
@@ -1691,14 +1691,9 @@ func (t *Type) SetUnderlying(underlying *Type) {
 	if underlying.HasShape() {
 		t.SetHasShape(true)
 	}
-	if underlying.flags&typeIsSIMD != 0 {
-		simdify(t, underlying.flags&typeIsSIMDTag != 0)
-		// simdify assigns the register counts of a vector; keep the
-		// underlying type's, which differ for an SVE predicate (passed in
-		// memory, see CalcStructSize).
-		t.intRegs = underlying.intRegs
-		t.floatRegs = underlying.floatRegs
-	}
+	// A type defined in terms of a SIMD type or tag is one too. Its layout,
+	// copied above, already reflects that.
+	t.flags |= underlying.flags & (typeIsSIMD | typeIsSIMDTag)
 
 	// spec: "The declared type does not inherit any methods bound
 	// to the existing type, but the method set of an interface
@@ -1994,23 +1989,3 @@ var SimType [NTYPE]Kind
 
 // Fake package for shape types (see typecheck.Shapify()).
 var ShapePkg = NewPkg("go.shape", "go.shape")
-
-func (t *Type) IsSIMD() bool {
-	return t.flags&typeIsSIMD != 0
-}
-func (t *Type) ContainsSIMD() bool {
-	if t.IsSIMD() {
-		return true
-	}
-	switch t.Kind() {
-	case TARRAY:
-		return t.Elem().ContainsSIMD()
-	case TSTRUCT:
-		for _, f := range t.Fields() {
-			if f.Type.ContainsSIMD() {
-				return true
-			}
-		}
-	}
-	return false
-}

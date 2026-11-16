@@ -6,7 +6,11 @@ package archsimd
 
 // v128 is a tag type that tells the compiler that this is really 128-bit SIMD
 type v128 struct {
-	_128 [0]func() // uncomparable
+	// _align gives the tag, and so the vector types that start with it,
+	// the 8-byte alignment that the compiler gives SIMD types. Unlike
+	// the compiler, go/types and types2 compute the alignment from the
+	// fields.
+	_align [0]uint64
 }
 
 // Float32x4 is a 128-bit SIMD vector of 4 float32s.
@@ -201,24 +205,24 @@ func (x Uint64x2) StoreArray(y *[2]uint64)
 
 // Mask8x16 is a mask for a SIMD vector of 16 8-bit elements.
 type Mask8x16 struct {
-	int8x16 v128
-	vals    [16]int8
+	mask8x16 v128
+	vals     [16]int8
 }
 
 // Mask16x8 is a mask for a SIMD vector of 8 16-bit elements.
 type Mask16x8 struct {
-	int16x8 v128
-	vals    [8]int16
+	mask16x8 v128
+	vals     [8]int16
 }
 
 // Mask32x4 is a mask for a SIMD vector of 4 32-bit elements.
 type Mask32x4 struct {
-	int32x4 v128
-	vals    [4]int32
+	mask32x4 v128
+	vals     [4]int32
 }
 
 // Mask64x2 is a mask for a SIMD vector of 2 64-bit elements.
 type Mask64x2 struct {
-	int64x2 v128
-	vals    [2]int64
+	mask64x2 v128
+	vals     [2]int64
 }

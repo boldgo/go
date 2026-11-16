@@ -11,12 +11,17 @@ import (
 
 // psve is a tag type that tells the compiler that this is an SVE predicate.
 type psve struct {
-	_sve [0]func() // uncomparable
+	// Only some bits of an SVE predicate are significant, so == can't
+	// compare its fields. Make it uncomparable for now.
+	_sve [0]func()
 }
 
-// v256 is a tag type that tells the compiler that this is really 256-bit SIMD
+// v256 is a tag type that tells the compiler that this is really scalable SIMD
+// of at most 256 bits.
 type v256 struct {
-	_256 [0]func() // uncomparable
+	// The bytes of a scalable vector above the vector length are undefined, so
+	// == can't compare its fields. Make it uncomparable for now.
+	_256 [0]func()
 }
 
 // Float32s is a scalable SIMD vector of float32s.
@@ -1071,10 +1076,10 @@ type Mask8s struct {
 	vals   uint64
 }
 
-// Mask8sAllTrue returns a mask with every lane true.
+// Mask8sAllTrue returns a mask where every element is true.
 //
 // Asm: PWHILELT, CPU Feature: SVE
-func Mask8sAllTrue() Mask8s
+func Mask8sAllTrue() (z Mask8s)
 
 // Mask8sFromCount returns a mask whose first count lanes are true and the
 // rest false. A count of 0 or less gives no true lanes, and a count of the
@@ -1149,10 +1154,10 @@ type Mask16s struct {
 	vals    uint64
 }
 
-// Mask16sAllTrue returns a mask with every lane true.
+// Mask16sAllTrue returns a mask where every element is true.
 //
 // Asm: PWHILELT, CPU Feature: SVE
-func Mask16sAllTrue() Mask16s
+func Mask16sAllTrue() (z Mask16s)
 
 // Mask16sFromCount returns a mask whose first count lanes are true and the
 // rest false. A count of 0 or less gives no true lanes, and a count of the
@@ -1227,10 +1232,10 @@ type Mask32s struct {
 	vals    uint64
 }
 
-// Mask32sAllTrue returns a mask with every lane true.
+// Mask32sAllTrue returns a mask where every element is true.
 //
 // Asm: PWHILELT, CPU Feature: SVE
-func Mask32sAllTrue() Mask32s
+func Mask32sAllTrue() (z Mask32s)
 
 // Mask32sFromCount returns a mask whose first count lanes are true and the
 // rest false. A count of 0 or less gives no true lanes, and a count of the
@@ -1305,10 +1310,10 @@ type Mask64s struct {
 	vals    uint64
 }
 
-// Mask64sAllTrue returns a mask with every lane true.
+// Mask64sAllTrue returns a mask where every element is true.
 //
 // Asm: PWHILELT, CPU Feature: SVE
-func Mask64sAllTrue() Mask64s
+func Mask64sAllTrue() (z Mask64s)
 
 // Mask64sFromCount returns a mask whose first count lanes are true and the
 // rest false. A count of 0 or less gives no true lanes, and a count of the

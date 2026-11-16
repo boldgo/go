@@ -89,7 +89,7 @@ sched < allg, allp;
 
 # Channels
 NONE < notifyList;
-hchan, notifyList < sudog;
+hchan, notifyList < waitingG;
 
 hchan, pollDesc, wakeableSleep < timers;
 timers, timerSend < timer < netpollInit;
@@ -187,7 +187,7 @@ gcBitsArenas,
 gscan < stackpool;
 gscan < stackLarge;
 # Generally, hchan must be acquired before gscan. But in one case,
-# where we suspend a G and then shrink its stack, syncadjustsudogs
+# where we suspend a G and then shrink its stack, syncAdjustWaitingGChan
 # can acquire hchan locks while holding gscan. To allow this case,
 # we use hchanLeaf instead of hchan.
 gscan < hchanLeaf;
@@ -198,7 +198,7 @@ defer,
   mspanSpecial,
   pollCache,
   reusableLink,
-  sudog,
+  waitingG,
   timer
 # Anything that can have write barriers can acquire WB.
 # Above WB, we can have write barriers.
@@ -269,7 +269,7 @@ var cyclicRanks = map[string]bool{
 	// select.
 	"hchan": true,
 	// Multiple hchanLeafs are acquired in hchan.sortkey() order in
-	// syncadjustsudogs().
+	// syncAdjustWaitingGChan().
 	"hchanLeaf": true,
 	// The point of the deadlock lock is to deadlock.
 	"deadlock": true,

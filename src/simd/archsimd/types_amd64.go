@@ -6,7 +6,11 @@ package archsimd
 
 // v128 is a tag type that tells the compiler that this is really 128-bit SIMD
 type v128 struct {
-	_128 [0]func() // uncomparable
+	// _align gives the tag, and so the vector types that start with it,
+	// the 8-byte alignment that the compiler gives SIMD types. Unlike
+	// the compiler, go/types and types2 compute the alignment from the
+	// fields.
+	_align [0]uint64
 }
 
 // Float32x4 is a 128-bit SIMD vector of 4 float32s.
@@ -337,8 +341,8 @@ func (x Uint64x2) StoreArrayMasked(y *[2]uint64, mask Mask64x2)
 //
 // CPU Feature: AVX
 type Mask8x16 struct {
-	int8x16 v128
-	vals    [16]int8
+	mask8x16 v128
+	vals     [16]int8
 }
 
 // Mask8x16FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -357,8 +361,8 @@ func (x Mask8x16) ToBits() (z uint16)
 //
 // CPU Feature: AVX
 type Mask16x8 struct {
-	int16x8 v128
-	vals    [8]int16
+	mask16x8 v128
+	vals     [8]int16
 }
 
 // Mask16x8FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -377,8 +381,8 @@ func (x Mask16x8) ToBits() (z uint8)
 //
 // CPU Feature: AVX
 type Mask32x4 struct {
-	int32x4 v128
-	vals    [4]int32
+	mask32x4 v128
+	vals     [4]int32
 }
 
 // Mask32x4FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -397,8 +401,8 @@ func (x Mask32x4) ToBits() (z uint8)
 //
 // CPU Feature: AVX
 type Mask64x2 struct {
-	int64x2 v128
-	vals    [2]int64
+	mask64x2 v128
+	vals     [2]int64
 }
 
 // Mask64x2FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -415,7 +419,11 @@ func (x Mask64x2) ToBits() (z uint8)
 
 // v256 is a tag type that tells the compiler that this is really 256-bit SIMD
 type v256 struct {
-	_256 [0]func() // uncomparable
+	// _align gives the tag, and so the vector types that start with it,
+	// the 8-byte alignment that the compiler gives SIMD types. Unlike
+	// the compiler, go/types and types2 compute the alignment from the
+	// fields.
+	_align [0]uint64
 }
 
 // Float32x8 is a 256-bit SIMD vector of 8 float32s.
@@ -746,8 +754,8 @@ func (x Uint64x4) StoreArrayMasked(y *[4]uint64, mask Mask64x4)
 //
 // CPU Feature: AVX
 type Mask8x32 struct {
-	int8x32 v256
-	vals    [32]int8
+	mask8x32 v256
+	vals     [32]int8
 }
 
 // Mask8x32FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -766,8 +774,8 @@ func (x Mask8x32) ToBits() (z uint32)
 //
 // CPU Feature: AVX
 type Mask16x16 struct {
-	int16x16 v256
-	vals     [16]int16
+	mask16x16 v256
+	vals      [16]int16
 }
 
 // Mask16x16FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -786,8 +794,8 @@ func (x Mask16x16) ToBits() (z uint16)
 //
 // CPU Feature: AVX
 type Mask32x8 struct {
-	int32x8 v256
-	vals    [8]int32
+	mask32x8 v256
+	vals     [8]int32
 }
 
 // Mask32x8FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -806,8 +814,8 @@ func (x Mask32x8) ToBits() (z uint8)
 //
 // CPU Feature: AVX
 type Mask64x4 struct {
-	int64x4 v256
-	vals    [4]int64
+	mask64x4 v256
+	vals     [4]int64
 }
 
 // Mask64x4FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -824,7 +832,11 @@ func (x Mask64x4) ToBits() (z uint8)
 
 // v512 is a tag type that tells the compiler that this is really 512-bit SIMD
 type v512 struct {
-	_512 [0]func() // uncomparable
+	// _align gives the tag, and so the vector types that start with it,
+	// the 8-byte alignment that the compiler gives SIMD types. Unlike
+	// the compiler, go/types and types2 compute the alignment from the
+	// fields.
+	_align [0]uint64
 }
 
 // Float32x16 is a 512-bit SIMD vector of 16 float32s.
@@ -1231,8 +1243,8 @@ func (x Uint64x8) StoreArrayMasked(y *[8]uint64, mask Mask64x8)
 //
 // CPU Feature: AVX512
 type Mask8x64 struct {
-	int8x64 v512
-	vals    [64]int8
+	mask8x64 v512
+	vals     [64]int8
 }
 
 // Mask8x64FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -1251,8 +1263,8 @@ func (x Mask8x64) ToBits() (z uint64)
 //
 // CPU Feature: AVX512
 type Mask16x32 struct {
-	int16x32 v512
-	vals     [32]int16
+	mask16x32 v512
+	vals      [32]int16
 }
 
 // Mask16x32FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -1271,8 +1283,8 @@ func (x Mask16x32) ToBits() (z uint32)
 //
 // CPU Feature: AVX512
 type Mask32x16 struct {
-	int32x16 v512
-	vals     [16]int32
+	mask32x16 v512
+	vals      [16]int32
 }
 
 // Mask32x16FromBits returns bitmap x as a mask. If bit i of x is set, then mask
@@ -1291,8 +1303,8 @@ func (x Mask32x16) ToBits() (z uint16)
 //
 // CPU Feature: AVX512
 type Mask64x8 struct {
-	int64x8 v512
-	vals    [8]int64
+	mask64x8 v512
+	vals     [8]int64
 }
 
 // Mask64x8FromBits returns bitmap x as a mask. If bit i of x is set, then mask
