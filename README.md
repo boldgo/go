@@ -3,10 +3,13 @@
 ![BoldGo](.github/boldgo.jpg)
 *The Go gopher was designed by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution license][cc4-by].*
 
-This is BoldGo, a fork of Go. It aims to explore things before mainstream Go
-eventually gets there. Use it at your own risk.
+BoldGo is a fork of Go for smaller, faster binaries. It tries ideas out
+before mainstream Go gets there, so use it at your own risk.
 
-BoldGo follows Go's major versioning: Go 1.27.x will be BoldGo 1.27.y.
+**Versions.** BoldGo 1.27.y is based on Go 1.27 and compatible with it: the
+same language and the same standard library APIs as every Go 1.27.x. Only the
+last number is BoldGo's own; it counts BoldGo releases and does not track Go's
+patch releases.
 
 Go is an open source programming language that makes it easy to build simple,
 reliable, and efficient software. Its canonical Git repository is located at
