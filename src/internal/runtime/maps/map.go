@@ -398,7 +398,7 @@ func (m *Map) Grow(typ *abi.MapType, n uintptr) {
 // grow is Grow with an explicit allocation limit, for tests.
 func (m *Map) grow(typ *abi.MapType, n uintptr, maxAlloc uintptr) {
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstatic(typ)
 	}
 
 	if n == 0 {
@@ -602,7 +602,7 @@ func (m *Map) getWithKey(typ *abi.MapType, key unsafe.Pointer) (unsafe.Pointer, 
 	}
 
 	if m.writing != 0 {
-		fatal("concurrent map read and map write")
+		return m.staticGetWithKey(typ, key)
 	}
 
 	hash := typ.Hasher(key, m.seed)
@@ -621,7 +621,8 @@ func (m *Map) getWithoutKey(typ *abi.MapType, key unsafe.Pointer) (unsafe.Pointe
 	}
 
 	if m.writing != 0 {
-		fatal("concurrent map read and map write")
+		_, elem, ok := m.staticGetWithKey(typ, key)
+		return elem, ok
 	}
 
 	hash := typ.Hasher(key, m.seed)
@@ -677,7 +678,7 @@ func (m *Map) Put(typ *abi.MapType, key, elem unsafe.Pointer) {
 // PutSlot never returns nil.
 func (m *Map) PutSlot(typ *abi.MapType, key unsafe.Pointer) unsafe.Pointer {
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstatic(typ)
 	}
 
 	hash := typ.Hasher(key, m.seed)
@@ -846,8 +847,8 @@ func (m *Map) Delete(typ *abi.MapType, key unsafe.Pointer) {
 		return
 	}
 
-	if m.writing != 0 {
-		fatal("concurrent map writes")
+	if m.writing != 0 && !m.unstaticDelete(typ, key) {
+		return
 	}
 
 	hash := typ.Hasher(key, m.seed)
@@ -932,7 +933,8 @@ func (m *Map) Clear(typ *abi.MapType) {
 	}
 
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstaticClear()
+		return
 	}
 	m.writing ^= 1 // toggle, see comment on writing
 
@@ -978,7 +980,13 @@ func (m *Map) clearSmall(typ *abi.MapType) {
 func (m *Map) Clone(typ *abi.MapType) *Map {
 	// Note: this should never be called with a nil map.
 	if m.writing != 0 {
-		fatal("concurrent map clone and map write")
+		if m.writing != staticWriting {
+			fatal("concurrent map clone and map write")
+		}
+		// A static map's clone shares its table.
+		m2 := new(Map)
+		*m2 = *m
+		return m2
 	}
 
 	// Shallow copy the Map structure.

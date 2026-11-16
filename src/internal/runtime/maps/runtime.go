@@ -100,7 +100,7 @@ func runtime_mapaccess2(typ *abi.MapType, m *Map, key unsafe.Pointer) (unsafe.Po
 	}
 
 	if m.writing != 0 {
-		fatal("concurrent map read and map write")
+		return m.staticGet(typ, key)
 	}
 
 	hash := typ.Hasher(key, m.seed)
@@ -175,7 +175,7 @@ func runtime_mapassign(typ *abi.MapType, m *Map, key unsafe.Pointer) unsafe.Poin
 		asan.Read(key, typ.Key.Size_)
 	}
 	if m.writing != 0 {
-		fatal("concurrent map writes")
+		m.unstatic(typ)
 	}
 
 	hash := typ.Hasher(key, m.seed)

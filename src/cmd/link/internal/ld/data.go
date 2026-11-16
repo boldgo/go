@@ -1387,6 +1387,13 @@ func (p *GCProg) End(size int64) {
 
 func (p *GCProg) AddSym(s loader.Sym) {
 	ldr := p.ctxt.loader
+	if ptrs, ok := imageMasks[s]; ok {
+		sval := ldr.SymValue(s)
+		for _, off := range ptrs {
+			p.w.Ptr((sval + off) / int64(p.ctxt.Arch.PtrSize))
+		}
+		return
+	}
 	typ := ldr.SymGoType(s)
 
 	// Things without pointers should be in sym.SNOPTRDATA or sym.SNOPTRBSS;

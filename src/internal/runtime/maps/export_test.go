@@ -139,3 +139,67 @@ func (t *table) GroupsStart() unsafe.Pointer {
 func (t *table) GroupsLength() uintptr {
 	return uintptr(t.groups.lengthMask + 1)
 }
+
+// NewStaticMap returns a static map of src's entries, laid out as an init
+// image lays one out. K must be a string or compared as plain memory.
+func NewStaticMap[K comparable, V any](src map[K]V) map[K]V {
+	mt := newTestMapType[K, V]()
+	n := uintptr(len(src))
+	m := &Map{used: uint64(n), writing: staticWriting}
+	if n == 0 {
+		return *(*map[K]V)(unsafe.Pointer(&m))
+	}
+	buckets := uintptr(1)
+	for buckets < n {
+		buckets <<= 1
+	}
+	type entry struct {
+		k K
+		v V
+		h uint64
+	}
+	var ents []entry
+	count := make([]uintptr, buckets+1)
+	for k, v := range src {
+		h := staticKeyHash(mt, unsafe.Pointer(&k))
+		ents = append(ents, entry{k, v, h})
+		count[uintptr(h)&(buckets-1)+1]++
+	}
+	for b := range buckets {
+		count[b+1] += count[b]
+	}
+	keys := make([]K, n)
+	elems := make([]V, n)
+	tags := make([]uint8, n)
+	next := append([]uintptr(nil), count...)
+	for _, e := range ents {
+		b := uintptr(e.h) & (buckets - 1)
+		i := next[b]
+		next[b]++
+		keys[i], elems[i], tags[i] = e.k, e.v, uint8(e.h>>56)
+	}
+	s := &staticTable{n: n, mask: buckets - 1, keys: unsafe.Pointer(unsafe.SliceData(keys)), elems: unsafe.Pointer(unsafe.SliceData(elems)), tags: unsafe.Pointer(&tags[0])}
+	if n < staticWide {
+		off := make([]uint16, buckets+1)
+		for i, c := range count {
+			off[i] = uint16(c)
+		}
+		s.off = unsafe.Pointer(&off[0])
+	} else {
+		off := make([]uint32, buckets+1)
+		for i, c := range count {
+			off[i] = uint32(c)
+		}
+		s.off = unsafe.Pointer(&off[0])
+	}
+	m.dirPtr = unsafe.Pointer(s)
+	return *(*map[K]V)(unsafe.Pointer(&m))
+}
+
+func IsStatic[K comparable, V any](m map[K]V) bool {
+	return (*(**Map)(unsafe.Pointer(&m))).writing == staticWriting
+}
+
+func StaticHash(p unsafe.Pointer, n uintptr) uint64 { return staticHash(p, n) }
+func StaticHash64(k uint64) uint64                  { return staticHash64(k) }
+func StaticHash32(k uint32) uint64                  { return staticHash32(k) }
