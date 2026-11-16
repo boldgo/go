@@ -1,13 +1,16 @@
-# The Go Programming Language
+# BoldGo
+
+![BoldGo](.github/boldgo.jpg)
+*The Go gopher was designed by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution license][cc4-by].*
+
+This is BoldGo, a fork of Go. It aims to explore things before mainstream Go
+eventually gets there. Use it at your own risk.
+
+BoldGo follows Go's major versioning: Go 1.27.x will be BoldGo 1.27.y.
 
 Go is an open source programming language that makes it easy to build simple,
-reliable, and efficient software.
-
-![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
-*Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution license][cc4-by].*
-
-Our canonical Git repository is located at https://go.googlesource.com/go.
-There is a mirror of the repository at https://github.com/golang/go.
+reliable, and efficient software. Its canonical Git repository is located at
+https://go.googlesource.com/go, with a mirror at https://github.com/golang/go.
 
 Unless otherwise noted, the Go source files are distributed under the
 BSD-style license found in the LICENSE file.
