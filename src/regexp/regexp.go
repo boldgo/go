@@ -78,8 +78,9 @@ import (
 // except for configuration methods, such as [Regexp.Longest].
 type Regexp struct {
 	expr           string       // as passed to Compile
-	prog           *syntax.Prog // compiled program
+	prog           *syntax.Prog // compiled program, or nil if lazy
 	onepass        *onePassProg // onepass program or nil
+	lazy           *lazyRegexp  // compiles the programs on first use, or nil
 	numSubexp      int
 	maxBitStateLen int
 	subexpNames    []string
@@ -96,6 +97,41 @@ type Regexp struct {
 	// This field can be modified by the Longest method,
 	// but it is otherwise read-only.
 	longest bool // whether regexp prefers leftmost-longest match
+
+	mode syntax.Flags // as passed to compile
+}
+
+// A lazyRegexp holds the programs of a Regexp that has all its other
+// fields: it compiles them on first use. Only an init image, which the
+// linker writes, makes such a Regexp, from one that compiled; copies of
+// it share the lazyRegexp.
+type lazyRegexp struct {
+	once sync.Once
+	re   *Regexp
+}
+
+// compiled returns re, or if it is lazy, the Regexp compile made of it.
+func (re *Regexp) compiled() *Regexp {
+	if re.lazy == nil {
+		return re
+	}
+	return re.lazy.load(re)
+}
+
+func (l *lazyRegexp) load(re *Regexp) *Regexp {
+	l.once.Do(func() {
+		c, err := compile(re.expr, re.mode, re.longest)
+		if err != nil {
+			panic(`regexp: Compile(` + quote(re.expr) + `): ` + err.Error())
+		}
+		l.re = c
+	})
+	return l.re
+}
+
+// numCap returns the number of capture slots of re's program.
+func (re *Regexp) numCap() int {
+	return re.compiled().prog.NumCap
 }
 
 // String returns the source text used to compile the regular expression.
@@ -160,6 +196,9 @@ func CompilePOSIX(expr string) (*Regexp, error) {
 // This method modifies the [Regexp] and may not be called concurrently
 // with any other methods.
 func (re *Regexp) Longest() {
+	if re.lazy != nil {
+		*re = *re.compiled()
+	}
 	re.longest = true
 }
 
@@ -188,6 +227,7 @@ func compile(expr string, mode syntax.Flags, longest bool) (*Regexp, error) {
 		subexpNames: capNames,
 		cond:        prog.StartCond(),
 		longest:     longest,
+		mode:        mode,
 		matchcap:    matchcap,
 		minInputLen: minInputLen(re),
 	}
@@ -589,8 +629,8 @@ func (re *Regexp) replaceAll(bsrc []byte, src string, nmatch int, repl func(dst 
 	} else {
 		endPos = len(src)
 	}
-	if nmatch > re.prog.NumCap {
-		nmatch = re.prog.NumCap
+	if c := re.numCap(); nmatch > c {
+		nmatch = c
 	}
 
 	var dstCap [2]int
@@ -866,7 +906,7 @@ func (re *Regexp) FindReaderIndex(r io.RuneReader) (m []int) {
 // The return value is nil for no match.
 func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 	var dstCap [4]int
-	m := re.find(nil, b, "", 0, re.prog.NumCap, dstCap[:0])
+	m := re.find(nil, b, "", 0, re.numCap(), dstCap[:0])
 	if m == nil {
 		return nil
 	}
@@ -884,7 +924,7 @@ func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 // The return value is nil for no match.
 func (re *Regexp) FindStringSubmatch(s string) []string {
 	var dstCap [4]int
-	a := re.find(nil, nil, s, 0, re.prog.NumCap, dstCap[:0])
+	a := re.find(nil, nil, s, 0, re.numCap(), dstCap[:0])
 	if a == nil {
 		return nil
 	}
@@ -901,14 +941,14 @@ func (re *Regexp) FindStringSubmatch(s string) []string {
 // The overall match is b[m[0]:m[1]], the first submatch is b[m[2]:m[3]], and so on.
 // The return value is nil for no match.
 func (re *Regexp) FindSubmatchIndex(b []byte) []int {
-	return re.pad(re.find(nil, b, "", 0, re.prog.NumCap, nil))
+	return re.pad(re.find(nil, b, "", 0, re.numCap(), nil))
 }
 
 // FindStringSubmatchIndex returns the first match for re in s, including submatches.
 // The overall match is s[m[0]:m[1]], the first submatch is s[m[2]:m[3]], and so on.
 // The return value is nil for no match.
 func (re *Regexp) FindStringSubmatchIndex(s string) []int {
-	return re.pad(re.find(nil, nil, s, 0, re.prog.NumCap, nil))
+	return re.pad(re.find(nil, nil, s, 0, re.numCap(), nil))
 }
 
 // FindReaderSubmatchIndex returns the first match for re in r, including submatches.
@@ -919,7 +959,7 @@ func (re *Regexp) FindStringSubmatchIndex(s string) []int {
 // FindReaderSubmatchIndex may read arbitrarily far from r,
 // including reading beyond the returned match.
 func (re *Regexp) FindReaderSubmatchIndex(r io.RuneReader) []int {
-	return re.pad(re.find(r, nil, "", 0, re.prog.NumCap, nil))
+	return re.pad(re.find(r, nil, "", 0, re.numCap(), nil))
 }
 
 // all returns at most n matches for re in b.
@@ -970,7 +1010,7 @@ func (re *Regexp) allStringIndex(s string, n int) iter.Seq[[]int] {
 // including submatch locations.
 func (re *Regexp) allSubmatch(b []byte, n int) iter.Seq[[][]byte] {
 	return func(yield func([][]byte) bool) {
-		for m := range re.matches("", b, n, re.prog.NumCap) {
+		for m := range re.matches("", b, n, re.numCap()) {
 			sub := make([][]byte, len(m)/2)
 			for i := range sub {
 				if m[2*i] >= 0 {
@@ -988,7 +1028,7 @@ func (re *Regexp) allSubmatch(b []byte, n int) iter.Seq[[][]byte] {
 // including submatch locations.
 func (re *Regexp) allStringSubmatch(s string, n int) iter.Seq[[]string] {
 	return func(yield func([]string) bool) {
-		for m := range re.matches(s, nil, n, re.prog.NumCap) {
+		for m := range re.matches(s, nil, n, re.numCap()) {
 			sub := make([]string, len(m)/2)
 			for i := range sub {
 				if m[2*i] >= 0 {
@@ -1006,7 +1046,7 @@ func (re *Regexp) allStringSubmatch(s string, n int) iter.Seq[[]string] {
 // including submatch locations.
 func (re *Regexp) allSubmatchIndex(b []byte, n int) iter.Seq[[]int] {
 	return func(yield func([]int) bool) {
-		for m := range re.matches("", b, n, re.prog.NumCap) {
+		for m := range re.matches("", b, n, re.numCap()) {
 			if !yield(slices.Clone(m)) {
 				break
 			}
@@ -1018,7 +1058,7 @@ func (re *Regexp) allSubmatchIndex(b []byte, n int) iter.Seq[[]int] {
 // including submatch locations.
 func (re *Regexp) allStringSubmatchIndex(s string, n int) iter.Seq[[]int] {
 	return func(yield func([]int) bool) {
-		for m := range re.matches(s, nil, n, re.prog.NumCap) {
+		for m := range re.matches(s, nil, n, re.numCap()) {
 			if !yield(slices.Clone(m)) {
 				break
 			}

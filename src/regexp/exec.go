@@ -519,6 +519,7 @@ func (re *Regexp) doMatch(r io.RuneReader, b []byte, s string) bool {
 //
 // nil is returned if no matches are found and non-nil if matches are found.
 func (re *Regexp) find(r io.RuneReader, b []byte, s string, pos int, ncap int, dstCap []int) []int {
+	re = re.compiled()
 	if dstCap == nil {
 		// Make sure 'return dstCap' is non-nil.
 		dstCap = arrayNoInts[:0:0]
